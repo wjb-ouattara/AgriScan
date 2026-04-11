@@ -1,0 +1,46 @@
+name: agriscan
+description: AgriScan AI — Détection des maladies des plantes
+version: 3.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & Fonts
+  google_fonts: ^6.1.0
+
+  # Camera & Image
+  camera: ^0.10.5+9
+  image_picker: ^1.0.7
+
+  # Permissions
+  permission_handler: ^11.3.0
+
+  # State management
+  provider: ^6.1.2
+
+  # Navigation
+  go_router: ^13.2.0
+
+  # Storage
+  shared_preferences: ^2.2.3
+
+  # Utils
+  intl: ^0.19.0
+  path_provider: ^2.1.3
+
+  # ML (TFLite - à activer quand le modèle est prêt)
+  # tflite_flutter: ^0.10.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
