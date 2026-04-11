@@ -43,3 +43,35 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+
+# Dataset — trop lourd pour GitHub (utiliser Google Drive ou Kaggle)
+dataset/
+
+# Modèles lourds — partager via Google Drive
+ml/models/*.h5
+ml/models/*.pb
+
+# Garder les .tflite (légers, nécessaires à Flutter)
+!ml/models/*.tflite
+!app/assets/models/*.tflite
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+
+# Flutter
+app/.dart_tool/
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+
+# Colab checkpoints
+ml/notebooks/.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
