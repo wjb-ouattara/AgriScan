@@ -21,6 +21,7 @@ CLASSES   = ["Healthy", "Blight", "Spot", "Infected", "Rust"]
 SPLITS    = ["train", "val", "test"]
 IMG_EXTS  = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 TARGET_SIZE = (224, 224)
+QUARANTINE_DIR = "quarantine"
 
 # ── Couleurs terminal ─────────────────────────────────────────
 GREEN  = "\033[92m"
@@ -292,7 +293,7 @@ def find_duplicates(folder_path: str) -> dict:
 #  FONCTION 5 — Trouver les images floues
 # =============================================================
 
-def find_blurry(folder_path: str, threshold: float = 100.0) -> list:
+def find_blurry(folder_path: str, threshold: float = 60.0) -> list:
     """
     Retourne les images trop floues en calculant la variance du
     Laplacien. Une valeur basse = image floue.
@@ -300,7 +301,7 @@ def find_blurry(folder_path: str, threshold: float = 100.0) -> list:
     Args:
         folder_path : dossier à analyser
         threshold   : score en dessous duquel l'image est floue
-                      (défaut: 100 — adapter selon vos images)
+                      (défaut: 60 — adapter selon vos images)
 
     Returns:
         list : liste de tuples (chemin, score_laplacien)
@@ -617,11 +618,17 @@ def run_full_check(dataset_path: str, split: str, class_name: str,
 
     if fix:
         print(f"\n{BOLD}  Application des corrections...{RESET}")
-
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        quarantine_folder = os.path.join(QUARANTINE_DIR, f"{split}_{class_name}_{timestamp}")
+        
         # Supprimer les corrompus
         for f in corrupted:
-            os.remove(f)
-            print(f"  {RED}Supprimé (corrompu) :{RESET} {os.path.basename(f)}")
+            dest_folder = os.path.join(quarantine_folder, "corrupted")
+            os.makedirs(dest_folder, exist_ok=True)
+            dest = os.path.join(dest_folder, os.path.basename(f))
+            shutil.move(f, dest)
+            print(f"  {YELLOW}Déplacé (corrompu) vers quarantaine :{RESET} {os.path.basename(f)}")
 
         # Convertir non-RGB
         for f, mode in non_rgb:
@@ -632,17 +639,29 @@ def run_full_check(dataset_path: str, split: str, class_name: str,
             except Exception as e:
                 print(f"  {RED}Erreur conversion : {e}{RESET}")
 
-        # Supprimer les doublons (garder le premier)
+        # Déplacer les doublons (garder le premier, déplacer les autres)
         for h, files in duplicates.items():
-            for f in files[1:]:
-                os.remove(f)
-                print(f"  {RED}Doublon supprimé :{RESET} {os.path.basename(f)}")
+            for i, f in enumerate(files):
+                if i > 0:  # Tous sauf le premier
+                    dest_folder = os.path.join(quarantine_folder, "duplicates")
+                    os.makedirs(dest_folder, exist_ok=True)
+                    dest = os.path.join(dest_folder, f"dup_{i}_{os.path.basename(f)}")
+                    shutil.move(f, dest)
+                    print(f"  {YELLOW}Doublon déplacé vers quarantaine :{RESET} {os.path.basename(f)}")
 
-        # Supprimer les flous
+        # Déplacer les flous
         for f, score in blurry:
             if os.path.exists(f):
-                os.remove(f)
-                print(f"  {YELLOW}Flou supprimé (score={score}) :{RESET} {os.path.basename(f)}")
+                dest_folder = os.path.join(quarantine_folder, f"blurry_score_{score}")
+                os.makedirs(dest_folder, exist_ok=True)
+                dest = os.path.join(dest_folder, os.path.basename(f))
+                shutil.move(f, dest)
+                print(f"  {YELLOW}Flou (score={score}) déplacé vers quarantaine :{RESET} {os.path.basename(f)}")
+
+        # Redimensionner
+        resize_all(folder, size=TARGET_SIZE)
+        
+        print(f"\n  {GREEN}Fichiers déplacés dans : {quarantine_folder}{RESET}")
 
         # Redimensionner
         resize_all(folder, size=TARGET_SIZE)
