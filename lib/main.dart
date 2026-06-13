@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
-
+import 'screens/app_shell.dart';
+import 'screens/login_screen.dart';
+import 'services/database_service.dart';
+import 'services/supabase_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,8 +13,9 @@ void main() async {
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
   ]);
-
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -20,11 +24,18 @@ void main() async {
     systemNavigationBarIconBrightness: Brightness.dark,
   ));
 
-  runApp(const AgriScanApp());
+  await SupabaseService.initialize();
+  await DatabaseService().db;
+
+  // Vérifier si déjà connecté
+  final isLoggedIn = await DatabaseService().isLoggedIn();
+
+  runApp(AgriScanApp(isLoggedIn: isLoggedIn));
 }
 
 class AgriScanApp extends StatelessWidget {
-  const AgriScanApp({super.key});
+  final bool isLoggedIn;
+  const AgriScanApp({super.key, required this.isLoggedIn});
 
   @override
   Widget build(BuildContext context) {
@@ -32,29 +43,7 @@ class AgriScanApp extends StatelessWidget {
       title: 'AgriScan',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
-      home: const SplashScreen(),
-      // Global page transitions
-      onGenerateRoute: (settings) {
-        return PageRouteBuilder(
-          settings: settings,
-          pageBuilder: (_, animation, __) {
-            switch (settings.name) {
-              default:
-                return const SplashScreen();
-            }
-          },
-          transitionsBuilder: (_, animation, __, child) {
-            return FadeTransition(
-              opacity: CurvedAnimation(
-                parent: animation,
-                curve: Curves.easeOut,
-              ),
-              child: child,
-            );
-          },
-          transitionDuration: const Duration(milliseconds: 280),
-        );
-      },
+      home: isLoggedIn ? const AppShell() : const SplashScreen(),
     );
   }
 }

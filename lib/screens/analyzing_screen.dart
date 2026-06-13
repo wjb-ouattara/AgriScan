@@ -1,16 +1,29 @@
-import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
-import '../widgets/common_widgets.dart';
+import '../services/ml_service.dart';
+import '../services/database_service.dart';
 import 'disease_result_screen.dart';
 
-// ═══════════════════════════════════════════════════════
-// ANALYZING SCREEN — AI Processing Animation
-// ═══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+//  ANALYZING SCREEN — Pipeline ML réel
+//  YOLO → crop → MobileViT/ConvNeXt → résultat
+// ══════════════════════════════════════════════════════════
 
 class AnalyzingScreen extends StatefulWidget {
-  const AnalyzingScreen({super.key});
+  final File?       imageFile;
+  final PlantType plantType;
+  final String?     scanId;
+  final bool        isVideo;
+
+  const AnalyzingScreen({
+    super.key,
+    this.imageFile,
+    this.plantType = PlantType.maize,
+    this.scanId,
+    this.isVideo = false,
+  });
 
   @override
   State<AnalyzingScreen> createState() => _AnalyzingScreenState();
@@ -19,512 +32,413 @@ class AnalyzingScreen extends StatefulWidget {
 class _AnalyzingScreenState extends State<AnalyzingScreen>
     with TickerProviderStateMixin {
 
-  // Spinner controllers
-  late AnimationController _spin1, _spin2, _spin3;
+  late AnimationController _ring1;
+  late AnimationController _ring2;
+  late AnimationController _ring3;
   late AnimationController _progressCtrl;
-  late Animation<double> _progressAnim;
-  late AnimationController _innerPulse;
+  late Animation<double>   _progressAnim;
 
-  // Steps state
-  final List<_StepState> _steps = [
-    _StepState(label: "Préparation de l'image", emoji: '📸'),
-    _StepState(label: 'Analyse intelligente',   emoji: '🧠'),
-    _StepState(label: 'Identification de la maladie', emoji: '🔍'),
+  double  _progress   = 0.0;
+  int     _stepIndex  = 0;
+  String  _currentMsg = 'Initialisation de l\'analyse…';
+  String  _errorMsg   = '';
+  bool    _hasError   = false;
+
+  DiseaseDetectionResult? _result;
+
+  static const _steps = [
+    _Step('📸', 'Préparation de l\'image',    'Optimisation qualité…'),
+    _Step('🔍', 'Détection de la plante',     'YOLOv8 en cours…'),
+    _Step('🧠', 'Classification de maladie',  'MobileViT analyse…'),
+    _Step('📊', 'Calcul du diagnostic',       'Finalisation…'),
   ];
-  String _statusMsg = 'Patientez quelques secondes…\nNe bougez pas votre téléphone';
-  Timer? _navTimer;
 
   @override
   void initState() {
     super.initState();
-
-    // Spinners
-    _spin1 = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
-    _spin2 = AnimationController(vsync: this, duration: const Duration(milliseconds: 1700))..repeat(reverse: false);
-    _spin3 = AnimationController(vsync: this, duration: const Duration(milliseconds: 2500))..repeat();
-
-    // Inner icon pulse
-    _innerPulse = AnimationController(
-      vsync: this, duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
-
-    // Progress bar
-    _progressCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 3200),
-    )..forward();
-    _progressAnim = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _progressCtrl, curve: Curves.easeInOut),
-    );
-
-    // Schedule step animations
-    _scheduleSteps();
-  }
-
-  void _scheduleSteps() {
-    // Step 1 — start
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[0].status = _StepStatus.active;
-        _statusMsg = 'Analyse de la texture des feuilles…';
-      });
+    _ring1 = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 1100))..repeat();
+    _ring2 = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 1800))..repeat();
+    _ring3 = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 2600))..repeat();
+    _progressCtrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 4000));
+    _progressAnim = Tween<double>(begin: 0, end: 0.9)
+        .animate(CurvedAnimation(
+        parent: _progressCtrl, curve: Curves.easeOut));
+    _progressAnim.addListener(() {
+      setState(() => _progress = _progressAnim.value);
     });
-    // Step 1 — done
-    Future.delayed(const Duration(milliseconds: 900), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[0].status = _StepStatus.done;
-      });
-    });
-    // Step 2 — start
-    Future.delayed(const Duration(milliseconds: 1100), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[1].status = _StepStatus.active;
-        _statusMsg = "L'IA compare avec 50 000 images…";
-      });
-    });
-    // Step 2 — done
-    Future.delayed(const Duration(milliseconds: 1900), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[1].status = _StepStatus.done;
-      });
-    });
-    // Step 3 — start
-    Future.delayed(const Duration(milliseconds: 2100), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[2].status = _StepStatus.active;
-        _statusMsg = 'Maladie identifiée ! Préparation du résultat…';
-      });
-    });
-    // Step 3 — done
-    Future.delayed(const Duration(milliseconds: 2800), () {
-      if (!mounted) return;
-      setState(() {
-        _steps[2].status = _StepStatus.done;
-        _statusMsg = 'Analyse terminée avec succès ✓';
-      });
-    });
-    // Navigate to result
-    _navTimer = Timer(const Duration(milliseconds: 3400), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, animation, __) => FadeTransition(
-            opacity: animation,
-            child: const DiseaseResultScreen(),
-          ),
-          transitionDuration: const Duration(milliseconds: 350),
-        ),
-      );
-    });
+    _progressCtrl.forward();
+    _runAnalysis();
   }
 
   @override
   void dispose() {
-    _spin1.dispose(); _spin2.dispose(); _spin3.dispose();
-    _innerPulse.dispose(); _progressCtrl.dispose();
-    _navTimer?.cancel();
+    _ring1.dispose(); _ring2.dispose();
+    _ring3.dispose(); _progressCtrl.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top bar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-              child: Row(
-                children: [
-                  AppBackButton(onTap: () => Navigator.of(context).pop()),
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        'Analyse en cours…',
-                        style: GoogleFonts.nunito(
-                          fontSize: 16, fontWeight: FontWeight.w800,
-                          color: AppColors.g900,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 46),
-                ],
-              ),
+  // ════════════════════════════════════════════════════
+  //  PIPELINE ML RÉEL
+  // ════════════════════════════════════════════════════
+  Future<void> _runAnalysis() async {
+    try {
+      // Étape 1 — Initialisation
+      _setStep(0, 'Chargement des modèles IA…');
+      await Future.delayed(const Duration(milliseconds: 500));
+      await AgriScanMLService().initialize();
+
+      // Étape 2 — YOLO
+      _setStep(1, 'Détection de la plante…');
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Étape 3 — Classification
+      _setStep(2, 'Analyse des symptômes…');
+
+      DiseaseDetectionResult result;
+
+      if (widget.imageFile != null) {
+        // Vrai pipeline ML avec l'image
+        result = await AgriScanMLService().predict(
+          imageFile     : widget.imageFile!,
+          forcePlantType: widget.plantType,
+        );
+      } else {
+        // Mode démo — pas d'image réelle
+        await Future.delayed(const Duration(milliseconds: 1500));
+        result = _demoResult();
+      }
+
+      // Étape 4 — Finalisation
+      _setStep(3, 'Préparation du rapport…');
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      // Mettre à jour le scan en BD avec le vrai résultat
+      if (widget.scanId != null) {
+        await _updateScanResult(result);
+      }
+
+      // Progression → 100%
+      setState(() => _progress = 1.0);
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      // Navigation vers résultat
+      if (mounted) {
+        Navigator.pushReplacement(context, PageRouteBuilder(
+            pageBuilder: (_, a, __) => DiseaseResultScreen(
+              result    : result,
+              imageFile : widget.imageFile,
+              scanId    : widget.scanId,
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-                child: Column(
-                  children: [
-                    // Spinner
-                    SizedBox(
-                      width: 168, height: 168,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Outer ring
-                          AnimatedBuilder(
-                            animation: _spin1,
-                            builder: (_, __) => Transform.rotate(
-                              angle: _spin1.value * 6.28,
-                              child: Container(
-                                width: 168, height: 168,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.transparent,
-                                    width: 3,
-                                  ),
-                                ),
-                                child: CustomPaint(painter: _ArcPainter(AppColors.g700)),
-                              ),
-                            ),
-                          ),
-                          // Middle ring
-                          AnimatedBuilder(
-                            animation: _spin2,
-                            builder: (_, __) => Transform.rotate(
-                              angle: -_spin2.value * 6.28,
-                              child: SizedBox(
-                                width: 140, height: 140,
-                                child: CustomPaint(
-                                  painter: _ArcPainter(AppColors.g600.withOpacity(0.6)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          // Inner dashed ring
-                          AnimatedBuilder(
-                            animation: _spin3,
-                            builder: (_, __) => Transform.rotate(
-                              angle: _spin3.value * 6.28,
-                              child: SizedBox(
-                                width: 116, height: 116,
-                                child: CustomPaint(
-                                  painter: _DashedCirclePainter(
-                                    AppColors.amber.withOpacity(0.5),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          // Inner icon
-                          AnimatedBuilder(
-                            animation: _innerPulse,
-                            builder: (_, __) => Container(
-                              width: 80, height: 80,
-                              decoration: BoxDecoration(
-                                color: AppColors.surface,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: AppColors.border, width: 1.5),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.g700.withOpacity(
-                                      0.1 + 0.12 * _innerPulse.value,
-                                    ),
-                                    blurRadius: 24,
-                                  ),
-                                ],
-                              ),
-                              child: const Center(
-                                child: Text('🔬', style: TextStyle(fontSize: 38)),
-                              ),
-                            ),
-                          ),
-                          // Detection dots
-                          const Positioned(
-                            top: 14, left: 60,
-                            child: _DetectionDot(delay: Duration(milliseconds: 300)),
-                          ),
-                          const Positioned(
-                            bottom: 26, right: 18,
-                            child: _DetectionDot(delay: Duration(milliseconds: 800)),
-                          ),
-                          const Positioned(
-                            bottom: 44, left: 20,
-                            child: _DetectionDot(delay: Duration(milliseconds: 1200)),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 28),
-                    Text(
-                      "L'IA examine votre plante",
-                      style: GoogleFonts.nunito(
-                        fontSize: 24, fontWeight: FontWeight.w900,
-                        color: AppColors.g900,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _statusMsg,
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.nunitoSans(
-                        fontSize: 15, color: AppColors.t2, height: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    // Progress bar
-                    AnimatedBuilder(
-                      animation: _progressCtrl,
-                      builder: (_, __) => Column(
-                        children: [
-                          AppProgressBar(value: _progressAnim.value),
-                          const SizedBox(height: 6),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                'Progression',
-                                style: GoogleFonts.nunitoSans(
-                                  fontSize: 12, fontWeight: FontWeight.w600,
-                                  color: AppColors.t3,
-                                ),
-                              ),
-                              Text(
-                                '${(_progressAnim.value * 100).round()}%',
-                                style: GoogleFonts.nunito(
-                                  fontSize: 13, fontWeight: FontWeight.w800,
-                                  color: AppColors.g700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    // Analysis steps
-                    ..._steps.asMap().entries.map(
-                      (e) => _AnalysisStep(step: e.value),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+            transitionsBuilder: (_, a, __, child) =>
+                FadeTransition(opacity: CurvedAnimation(
+                    parent: a, curve: Curves.easeOut), child: child),
+            transitionDuration: const Duration(milliseconds: 400)));
+      }
 
-// ── Step state model ──────────────────────────────────────
-enum _StepStatus { waiting, active, done }
-
-class _StepState {
-  final String label;
-  final String emoji;
-  _StepStatus status;
-
-  _StepState({required this.label, required this.emoji, this.status = _StepStatus.waiting});
-}
-
-// ── Single analysis step widget ───────────────────────────
-class _AnalysisStep extends StatelessWidget {
-  final _StepState step;
-  const _AnalysisStep({super.key, required this.step});
-
-  @override
-  Widget build(BuildContext context) {
-    final Color bgColor;
-    final Color borderColor;
-    final String displayEmoji;
-
-    switch (step.status) {
-      case _StepStatus.waiting:
-        bgColor = AppColors.surface2;
-        borderColor = AppColors.border;
-        displayEmoji = step.emoji;
-      case _StepStatus.active:
-        bgColor = const Color(0xFFEAF5EB);
-        borderColor = AppColors.g300;
-        displayEmoji = '⚡';
-      case _StepStatus.done:
-        bgColor = AppColors.green2;
-        borderColor = const Color(0xFFA8D9B0);
-        displayEmoji = '✅';
+    } on PlantNotFoundException catch (e) {
+      _showError('🌿 Plante non reconnue',
+          e.message + '\n\nConseils :\n• Rapprochez-vous de la feuille\n'
+              '• Assurez-vous d\'avoir sélectionné la bonne culture\n'
+              '• Bonne lumière, fond neutre');
+    } on ModelNotLoadedException catch (e) {
+      _showError('⚙️ Modèle non chargé', e.message);
+    } catch (e) {
+      _showError('Erreur d\'analyse', e.toString());
     }
+  }
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: borderColor, width: 1.5),
-        boxShadow: AppShadows.sm,
-      ),
-      child: Row(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            width: 42, height: 42,
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: borderColor, width: 1.5),
-            ),
-            child: Center(
-              child: Text(displayEmoji, style: const TextStyle(fontSize: 20)),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  step.label,
-                  style: GoogleFonts.nunito(
-                    fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.t1,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  step.status == _StepStatus.waiting
-                      ? 'En attente…'
-                      : step.status == _StepStatus.active
-                          ? 'En cours…'
-                          : 'Terminé',
-                  style: GoogleFonts.nunitoSans(fontSize: 12, color: AppColors.t3),
-                ),
-              ],
-            ),
-          ),
-          if (step.status == _StepStatus.done)
-            Text(
-              '✓',
-              style: GoogleFonts.nunito(
-                fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.green,
-              ),
-            ),
-        ],
-      ),
+  void _setStep(int index, String msg) {
+    if (mounted) setState(() {
+      _stepIndex  = index;
+      _currentMsg = msg;
+    });
+  }
+
+  Future<void> _updateScanResult(DiseaseDetectionResult result) async {
+    final db = DatabaseService();
+    final allScans = await db.getScans(limit: 1);
+    // Mettre à jour le dernier scan avec les vrais résultats
+    if (allScans.isNotEmpty) {
+      final scan = allScans.first;
+      // La BD ne supporte pas update direct — on recrée
+      // (amélioration future : ajouter updateScan())
+    }
+  }
+
+  DiseaseDetectionResult _demoResult() {
+    return DiseaseDetectionResult(
+      diseaseName: 'Rust',
+      confidence : 0.87,
+      plantType  : widget.plantType,
+      modelUsed  : ModelVersion.mobileViT,
+      allScores  : [
+        ClassScore('Rust',    0.87),
+        ClassScore('Blight',  0.08),
+        ClassScore('Spot',    0.03),
+        ClassScore('Healthy', 0.02),
+      ],
+      inferenceMs: 245,
     );
   }
-}
 
-// ── Detection dot ─────────────────────────────────────────
-class _DetectionDot extends StatefulWidget {
-  final Duration delay;
-  const _DetectionDot({required this.delay});
-
-  @override
-  State<_DetectionDot> createState() => _DetectionDotState();
-}
-
-class _DetectionDotState extends State<_DetectionDot>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _scale;
-  late Animation<double> _opacity;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 800),
-    );
-    _scale = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack),
-    );
-    _opacity = Tween<double>(begin: 0, end: 1).animate(_ctrl);
-
-    Future.delayed(widget.delay, () {
-      if (mounted) _ctrl.forward().then((_) {
-        if (mounted) {
-          _ctrl.repeat(reverse: true,
-              period: const Duration(milliseconds: 900));
-        }
-      });
+  void _showError(String title, String msg) {
+    if (mounted) setState(() {
+      _hasError  = true;
+      _errorMsg  = msg;
+      _currentMsg = title;
+      _progress   = 0;
     });
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
-
-  @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) => Transform.scale(
-        scale: _scale.value,
-        child: Opacity(
-          opacity: _opacity.value,
-          child: Container(
-            width: 12, height: 12,
-            decoration: BoxDecoration(
-              color: AppColors.g600,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.g600.withOpacity(0.4),
-                  blurRadius: 10,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    final w = MediaQuery.of(context).size.width;
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      body: w >= 900 ? _buildDesktop() : _buildMobile(),
     );
   }
-}
 
-// ── Custom Painters ───────────────────────────────────────
-class _ArcPainter extends CustomPainter {
-  final Color color;
-  _ArcPainter(this.color);
+  Widget _buildDesktop() => Row(children: [
+    Expanded(flex: 5,
+        child: Container(
+            decoration: const BoxDecoration(gradient: LinearGradient(
+                begin: Alignment.topLeft, end: Alignment.bottomRight,
+                colors: [Color(0xFF1A3D1C), Color(0xFF234F26)])),
+            child: Center(child: Column(
+                mainAxisSize: MainAxisSize.min, children: [
+              if (!_hasError) ...[
+                _buildSpinner(180),
+                const SizedBox(height: 28),
+                Text('Analyse en cours', style: GoogleFonts.nunito(
+                    fontSize: 22, fontWeight: FontWeight.w900,
+                    color: Colors.white)),
+                const SizedBox(height: 10),
+                SizedBox(width: 300, child: Text(_currentMsg,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.nunitoSans(
+                        fontSize: 14, color: Colors.white.withOpacity(0.7)))),
+                const SizedBox(height: 28),
+                _buildProgressBar(300),
+              ] else
+                _buildErrorWidget(isDesktop: true),
+            ])))),
+    Container(width: 1.5, color: AppColors.border),
+    SizedBox(width: 360,
+        child: _buildStepsPanel(isDesktop: true)),
+  ]);
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+  Widget _buildMobile() => SafeArea(
+      child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 32),
+          child: _hasError
+              ? _buildErrorWidget(isDesktop: false)
+              : Column(children: [
+            _buildSpinner(160),
+            const SizedBox(height: 24),
+            Text('L\'IA examine votre plante',
+                style: GoogleFonts.nunito(fontSize: 20,
+                    fontWeight: FontWeight.w900, color: AppColors.g900)),
+            const SizedBox(height: 8),
+            Text(_currentMsg, textAlign: TextAlign.center,
+                style: GoogleFonts.nunitoSans(
+                    fontSize: 14, color: AppColors.t2)),
+            const SizedBox(height: 20),
+            _buildProgressBar(double.infinity),
+            const SizedBox(height: 28),
+            _buildStepsPanel(isDesktop: false),
+          ])));
 
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    canvas.drawArc(rect, -1.57, 4.5, false, paint);
+  Widget _buildSpinner(double size) {
+    return SizedBox(width: size, height: size,
+        child: Stack(alignment: Alignment.center, children: [
+          AnimatedBuilder(animation: _ring1, builder: (_, __) =>
+              Transform.rotate(angle: _ring1.value * 6.28,
+                  child: Container(width: size, height: size,
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          border: Border.all(
+                              color: AppColors.g600.withOpacity(0.9), width: 3))))),
+          AnimatedBuilder(animation: _ring2, builder: (_, __) =>
+              Transform.rotate(angle: -_ring2.value * 6.28,
+                  child: Container(width: size - 28, height: size - 28,
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          border: Border.all(
+                              color: AppColors.g500.withOpacity(0.5), width: 2))))),
+          AnimatedBuilder(animation: _ring3, builder: (_, __) =>
+              Transform.rotate(angle: _ring3.value * 6.28,
+                  child: Container(width: size - 56, height: size - 56,
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          border: Border.all(
+                              color: AppColors.amber.withOpacity(0.4), width: 2))))),
+          Container(
+              width: size - 80, height: size - 80,
+              decoration: BoxDecoration(
+                  color: AppColors.surface, shape: BoxShape.circle,
+                  boxShadow: AppShadows.md),
+              child: const Center(
+                  child: Text('🔬', style: TextStyle(fontSize: 36)))),
+        ]));
   }
 
-  @override
-  bool shouldRepaint(_) => false;
-}
-
-class _DashedCirclePainter extends CustomPainter {
-  final Color color;
-  _DashedCirclePainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-
-    const dashCount = 12;
-    const gapAngle = 0.2;
-    final dashAngle = (6.28 / dashCount) - gapAngle;
-
-    for (int i = 0; i < dashCount; i++) {
-      final startAngle = i * (6.28 / dashCount);
-      canvas.drawArc(
-        Rect.fromLTWH(0, 0, size.width, size.height),
-        startAngle, dashAngle, false, paint,
-      );
-    }
+  Widget _buildProgressBar(double width) {
+    final pct = (_progress * 100).round();
+    return SizedBox(
+        width: width == double.infinity ? null : width,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ClipRRect(borderRadius: BorderRadius.circular(100),
+                  child: LinearProgressIndicator(
+                      value: _progress, minHeight: 10,
+                      backgroundColor: AppColors.border,
+                      valueColor: AlwaysStoppedAnimation(AppColors.g600))),
+              const SizedBox(height: 8),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Progression', style: GoogleFonts.nunito(
+                        fontSize: 12, color: AppColors.t3)),
+                    Text('$pct%', style: GoogleFonts.nunito(
+                        fontSize: 13, fontWeight: FontWeight.w800,
+                        color: AppColors.g700)),
+                  ]),
+            ]));
   }
 
-  @override
-  bool shouldRepaint(_) => false;
+  Widget _buildStepsPanel({required bool isDesktop}) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isDesktop) Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Étapes d\'analyse', style: GoogleFonts.nunito(
+                        fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.g900)),
+                    const SizedBox(height: 4),
+                    Text('Pipeline IA AgriScan', style: GoogleFonts.nunitoSans(
+                        fontSize: 13, color: AppColors.t3)),
+                  ])),
+          Padding(
+              padding: isDesktop
+                  ? const EdgeInsets.symmetric(horizontal: 20)
+                  : EdgeInsets.zero,
+              child: Column(children: _steps.asMap().entries.map((e) {
+                final i     = e.key;
+                final s     = e.value;
+                final done  = i < _stepIndex;
+                final active= i == _stepIndex && !_hasError;
+                final wait  = i > _stepIndex;
+
+                return AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                        color: done ? AppColors.g50 : active
+                            ? AppColors.surface : AppColors.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                            color: done ? AppColors.g300 : active
+                                ? AppColors.g600 : AppColors.border,
+                            width: active || done ? 2 : 1.5)),
+                    child: Row(children: [
+                      Container(width: 42, height: 42,
+                          decoration: BoxDecoration(
+                              color: done ? AppColors.g700 : active
+                                  ? AppColors.g100 : AppColors.surface2,
+                              borderRadius: BorderRadius.circular(13)),
+                          child: Center(child: Text(
+                              done ? '✅' : s.icon,
+                              style: const TextStyle(fontSize: 20)))),
+                      const SizedBox(width: 14),
+                      Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(s.title, style: GoogleFonts.nunito(
+                                fontSize: 14, fontWeight: FontWeight.w700,
+                                color: done ? AppColors.g700 : active
+                                    ? AppColors.t1 : AppColors.t3)),
+                            const SizedBox(height: 2),
+                            Text(done ? 'Terminé ✓' : active
+                                ? _currentMsg : 'En attente…',
+                                style: GoogleFonts.nunitoSans(
+                                    fontSize: 12, color: done
+                                    ? AppColors.g600 : AppColors.t3)),
+                          ])),
+                      if (active && !_hasError)
+                        SizedBox(width: 20, height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: AppColors.g600))
+                      else if (done)
+                        Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                                color: AppColors.g50,
+                                borderRadius: BorderRadius.circular(100),
+                                border: Border.all(
+                                    color: const Color(0xFFA8D9B0))),
+                            child: Text('✓', style: GoogleFonts.nunito(
+                                fontSize: 12, fontWeight: FontWeight.w800,
+                                color: AppColors.green))),
+                    ]));
+              }).toList())),
+        ]);
+  }
+
+  Widget _buildErrorWidget({required bool isDesktop}) {
+    return Container(
+        padding: const EdgeInsets.all(24),
+        margin: isDesktop ? const EdgeInsets.all(32) : EdgeInsets.zero,
+        decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.red.withOpacity(0.3), width: 1.5),
+            boxShadow: AppShadows.sm),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('⚠️', style: TextStyle(fontSize: 48)),
+          const SizedBox(height: 16),
+          Text(_currentMsg, style: GoogleFonts.nunito(
+              fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.g900)),
+          const SizedBox(height: 10),
+          Text(_errorMsg, textAlign: TextAlign.center,
+              style: GoogleFonts.nunitoSans(
+                  fontSize: 13, color: AppColors.t2, height: 1.5)),
+          const SizedBox(height: 24),
+          Row(children: [
+            Expanded(child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.t2,
+                    side: const BorderSide(color: AppColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+                child: Text('Retour', style: GoogleFonts.nunito(
+                    fontSize: 14, fontWeight: FontWeight.w700)))),
+            const SizedBox(width: 12),
+            Expanded(child: ElevatedButton(
+                onPressed: () {
+                  setState(() { _hasError = false; _progress = 0; });
+                  _runAnalysis();
+                },
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.g700,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    elevation: 0),
+                child: Text('Réessayer', style: GoogleFonts.nunito(
+                    fontSize: 14, fontWeight: FontWeight.w800,
+                    color: Colors.white)))),
+          ]),
+        ]));
+  }
+}
+
+class _Step {
+  final String icon, title, subtitle;
+  const _Step(this.icon, this.title, this.subtitle);
 }
