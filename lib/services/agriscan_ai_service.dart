@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/secrets.dart';
 
 // ══════════════════════════════════════════════════════════
 //  AGRISCAN AI SERVICE
@@ -12,8 +13,7 @@ class AgriScanAIService {
   factory AgriScanAIService() => _instance;
   AgriScanAIService._internal();
 
-  static const String _key  =
-      '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';
+  static const String _key = Secrets.groqApiKey;
   static const String _url  =
       'https://api.groq.com/openai/v1/chat/completions';
   static const String _model = 'llama-3.1-8b-instant';

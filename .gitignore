@@ -75,3 +75,6 @@ ml/notebooks/.ipynb_checkpoints/
 # OS
 .DS_Store
 Thumbs.db
+
+# Clés secrètes — ne jamais commiter
+lib/config/secrets.dart

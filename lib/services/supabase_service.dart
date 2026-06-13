@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'database_service.dart';
 import 'token_service.dart';
+import '../config/secrets.dart';
 
 // ══════════════════════════════════════════════════════════
 //  SUPABASE SERVICE
@@ -21,8 +22,8 @@ class SupabaseService {
 
   // ── Configuration Supabase ────────────────────────────
   // Remplacez par vos vraies valeurs depuis app.supabase.com
-  static const String _supabaseUrl = 'https://cuzftcwomzsabuboyfrc.supabase.co';
-  static const String _supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1emZ0Y3dvbXpzYWJ1Ym95ZnJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NTc5NDAsImV4cCI6MjA5NTMzMzk0MH0.Vp0NuxTLbN9SQFdWYLZEjoWc86XOOYoFDcXBa-Hr9kc';
+  static const String _supabaseUrl = Secrets.supabaseUrl;
+  static const String _supabaseKey = Secrets.supabaseAnonKey;
 
   final _db     = DatabaseService();
   final _tokens = TokenService();
