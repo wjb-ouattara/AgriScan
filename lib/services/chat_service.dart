@@ -6,11 +6,13 @@ import 'knowledge_base_service.dart';
 import '../config/secrets.dart';
 
 // ══════════════════════════════════════════════════════════
-//  CHAT SERVICE
+//  CHAT SERVICE — multi-conversations
 //  Assistant agronome conversationnel (Groq) enrichi par :
 //  - le contexte agricole de l'utilisateur (région, culture...)
 //  - son dernier diagnostic AgriScan (si disponible)
 //  - la base de connaissances RAG (KnowledgeBaseService)
+//  Chaque échange appartient à une ChatConversation, listée
+//  et gérable depuis le panneau latéral (ChatHistoryDrawer).
 // ══════════════════════════════════════════════════════════
 
 class ChatMessage {
@@ -49,6 +51,36 @@ class ChatMessage {
   };
 }
 
+// ── Conversation (fil de discussion) ───────────────────────
+class ChatConversation {
+  final String id;
+  final String title;       // vide tant qu'aucun message n'a été envoyé
+  final String? preview;     // aperçu du dernier message
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const ChatConversation({
+    required this.id,
+    required this.title,
+    this.preview,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  String get displayTitle =>
+      title.trim().isNotEmpty ? title.trim() : 'Nouvelle conversation';
+
+  factory ChatConversation.fromMap(Map<String, dynamic> m) => ChatConversation(
+    id       : m['id'] as String,
+    title    : m['title'] as String? ?? '',
+    preview  : m['last_message'] as String?,
+    createdAt: DateTime.parse(
+        m['created_at'] as String? ?? DateTime.now().toIso8601String()),
+    updatedAt: DateTime.parse(
+        m['updated_at'] as String? ?? DateTime.now().toIso8601String()),
+  );
+}
+
 // ── Contexte agricole + dernier diagnostic injectés dans le prompt ──
 class ChatContext {
   final String region, culture, climate, soil, season;
@@ -84,37 +116,107 @@ class ChatService {
   static String get _key => Secrets.groqApiKey;
 
   // ════════════════════════════════════════════════════
-  //  HISTORIQUE (persistance SQLite)
+  //  CONVERSATIONS
   // ════════════════════════════════════════════════════
-  Future<List<ChatMessage>> loadHistory({int limit = 100}) async {
+
+  /// Crée une nouvelle conversation vide et retourne son id.
+  /// Le titre sera généré automatiquement à partir du premier
+  /// message envoyé.
+  Future<String> createConversation() async {
     final database = await _db.db;
-    final rows = await database.query(
-        'chat_messages', orderBy: 'created_at ASC', limit: limit);
+    final id  = _uuid.v4();
+    final now = DateTime.now().toIso8601String();
+    await database.insert('chat_conversations', {
+      'id'        : id,
+      'title'     : '',
+      'created_at': now,
+      'updated_at': now,
+    });
+    return id;
+  }
+
+  /// Liste toutes les conversations, plus récentes en premier,
+  /// avec un aperçu du dernier message.
+  Future<List<ChatConversation>> listConversations() async {
+    final database = await _db.db;
+    final rows = await database.rawQuery('''
+      SELECT c.id, c.title, c.created_at, c.updated_at,
+             (SELECT content FROM chat_messages
+                WHERE conversation_id = c.id
+                ORDER BY created_at DESC LIMIT 1) as last_message
+      FROM chat_conversations c
+      ORDER BY c.updated_at DESC
+    ''');
+    return rows.map(ChatConversation.fromMap).toList();
+  }
+
+  Future<void> renameConversation(String id, String title) async {
+    final database = await _db.db;
+    await database.update('chat_conversations', {'title': title},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteConversation(String id) async {
+    final database = await _db.db;
+    await database.delete('chat_messages',
+        where: 'conversation_id = ?', whereArgs: [id]);
+    await database.delete('chat_conversations',
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<ChatMessage>> loadMessages(String conversationId) async {
+    final database = await _db.db;
+    final rows = await database.query('chat_messages',
+        where: 'conversation_id = ?', whereArgs: [conversationId],
+        orderBy: 'created_at ASC');
     return rows.map(ChatMessage.fromMap).toList();
   }
 
-  Future<void> clearHistory() async {
+  Future<void> _persist(String conversationId, ChatMessage msg) async {
     final database = await _db.db;
-    await database.delete('chat_messages');
+    final map = msg.toMap();
+    map['conversation_id'] = conversationId;
+    await database.insert('chat_messages', map);
   }
 
-  Future<void> _persist(ChatMessage msg) async {
+  /// Donne un titre à la conversation à partir du premier message
+  /// (si elle n'en a pas encore).
+  Future<void> _maybeSetTitle(String conversationId, String firstMessage) async {
     final database = await _db.db;
-    await database.insert('chat_messages', msg.toMap());
+    final rows = await database.query('chat_conversations',
+        columns: ['title'], where: 'id = ?', whereArgs: [conversationId]);
+    if (rows.isEmpty) return;
+    final current = (rows.first['title'] as String?) ?? '';
+    if (current.trim().isEmpty) {
+      var title = firstMessage.trim().replaceAll('\n', ' ');
+      if (title.length > 48) title = '${title.substring(0, 48)}…';
+      await database.update('chat_conversations', {'title': title},
+          where: 'id = ?', whereArgs: [conversationId]);
+    }
+  }
+
+  Future<void> _touchConversation(String conversationId) async {
+    final database = await _db.db;
+    await database.update('chat_conversations',
+        {'updated_at': DateTime.now().toIso8601String()},
+        where: 'id = ?', whereArgs: [conversationId]);
   }
 
   // ════════════════════════════════════════════════════
   //  ENVOI D'UN MESSAGE
   // ════════════════════════════════════════════════════
   Future<ChatMessage> sendMessage({
+    required String conversationId,
     required String text,
     required List<ChatMessage> history,
     required ChatContext context,
   }) async {
-    // Persiste le message utilisateur
+    // Persiste le message utilisateur + titre auto + horodatage
     final userMsg = ChatMessage(
         id: _uuid.v4(), role: 'user', content: text, createdAt: DateTime.now());
-    await _persist(userMsg);
+    await _persist(conversationId, userMsg);
+    await _maybeSetTitle(conversationId, text);
+    await _touchConversation(conversationId);
 
     // Récupération RAG
     final relevant = await _kb.search(text, topK: 3);
@@ -161,7 +263,8 @@ class ChatService {
       sources   : relevant.map((d) => d.title).toList(),
       createdAt : DateTime.now(),
     );
-    await _persist(reply);
+    await _persist(conversationId, reply);
+    await _touchConversation(conversationId);
     return reply;
   }
 

@@ -3,7 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/database_service.dart';
+import '../utils/disease_meta.dart';
 import 'disease_result_screen.dart';
+import 'recommendations_screen.dart';
+
+// ── Helpers d'affichage ────────────────────────────────────
+String diseaseDisplayName(String code) =>
+    DiseaseMeta.all.containsKey(code) ? DiseaseMeta.of(code).labelFr : code;
+
+String plantDisplayName(String raw) {
+  final l = raw.toLowerCase();
+  if (l.contains('maïs') || l.contains('maize')) return 'Maïs';
+  if (l.contains('tomate') || l.contains('tomato')) return 'Tomate';
+  return raw;
+}
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -77,9 +90,12 @@ class _HistoryScreenState extends State<HistoryScreen>
         break;
     }
     if (_search.isNotEmpty) {
+      final q = _search.toLowerCase();
       result = result.where((s) =>
-      s.diseaseName.toLowerCase().contains(_search.toLowerCase()) ||
-          s.plantType.toLowerCase().contains(_search.toLowerCase())).toList();
+      s.diseaseName.toLowerCase().contains(q) ||
+          diseaseDisplayName(s.diseaseName).toLowerCase().contains(q) ||
+          s.plantType.toLowerCase().contains(q) ||
+          (s.customLabel?.toLowerCase().contains(q) ?? false)).toList();
     }
     setState(() => _filtered = result);
   }
@@ -87,6 +103,70 @@ class _HistoryScreenState extends State<HistoryScreen>
   bool _isHealthy(ScanRecord s) =>
       s.diseaseName.toLowerCase().contains('sain') ||
           s.diseaseName.toLowerCase().contains('healthy');
+
+  // ── Renommer (étiquette personnalisée) ─────────────────
+  Future<void> _renameScan(ScanRecord scan) async {
+    final ctrl = TextEditingController(text: scan.customLabel ?? '');
+    final result = await showDialog<String?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Renommer l\'analyse', style: GoogleFonts.nunito(
+                fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.g900)),
+            content: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Donnez un nom à ce scan pour le retrouver facilement '
+                      '(ex: parcelle, champ...).',
+                      style: GoogleFonts.nunitoSans(fontSize: 12.5, color: AppColors.t3)),
+                  const SizedBox(height: 12),
+                  TextField(
+                      controller: ctrl, autofocus: true,
+                      style: GoogleFonts.nunitoSans(fontSize: 14),
+                      decoration: InputDecoration(
+                          hintText: 'Ex : Champ Nord - Parcelle 3',
+                          hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+                ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, null),
+                  child: const Text('Annuler')),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.g700, elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                  child: const Text('Enregistrer', style: TextStyle(color: Colors.white))),
+            ]));
+    if (result == null) return;
+    await _db.updateScanLabel(scan.id, result.isEmpty ? null : result);
+    await _loadScans();
+  }
+
+  // ── Supprimer ────────────────────────────────────────────
+  Future<void> _deleteScan(ScanRecord scan) async {
+    final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Supprimer cette analyse ?', style: GoogleFonts.nunito(
+                fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.g900)),
+            content: Text('Cette action est irréversible.',
+                style: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t2)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Annuler')),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.red, elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Supprimer', style: TextStyle(color: Colors.white))),
+            ]));
+    if (confirm != true) return;
+    await _db.deleteScan(scan.id);
+    await _loadScans();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -194,7 +274,7 @@ class _HistoryScreenState extends State<HistoryScreen>
               onChanged: (v) { _search = v; _applyFilter(); },
               style: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t1),
               decoration: InputDecoration(
-                  hintText: 'Rechercher une maladie...',
+                  hintText: 'Rechercher une maladie ou une étiquette...',
                   hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
                   prefixIcon: const Icon(Icons.search_rounded, size: 18, color: AppColors.t3),
                   border: InputBorder.none,
@@ -309,7 +389,9 @@ class _HistoryScreenState extends State<HistoryScreen>
                   position: Tween(begin: const Offset(1, 0), end: Offset.zero)
                       .animate(CurvedAnimation(parent: a, curve: Curves.easeOut)),
                   child: child),
-              transitionDuration: const Duration(milliseconds: 300)))));
+              transitionDuration: const Duration(milliseconds: 300))),
+          onRename: () => _renameScan(_filtered[i]),
+          onDelete: () => _deleteScan(_filtered[i])));
 
   Widget _buildEmpty() => Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -434,8 +516,10 @@ class _HistoryScreenState extends State<HistoryScreen>
                       padding: const EdgeInsets.only(bottom: 12),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Row(children: [
-                          Expanded(child: Text(e.key, style: GoogleFonts.nunito(
-                              fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.t1))),
+                          Expanded(child: Text(diseaseDisplayName(e.key), style: GoogleFonts.nunito(
+                              fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.t1),
+                              overflow: TextOverflow.ellipsis)),
+                          const SizedBox(width: 8),
                           Text('${e.value}', style: GoogleFonts.nunito(
                               fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.red)),
                         ]),
@@ -454,7 +538,6 @@ class _HistoryScreenState extends State<HistoryScreen>
 // ══════════════════════════════════════════════════════════
 //  WIDGETS HELPERS
 // ══════════════════════════════════════════════════════════
-
 
 class _SegmentBtn extends StatelessWidget {
   final String emoji, label;
@@ -572,10 +655,30 @@ class _BarRow extends StatelessWidget {
   }
 }
 
-class _ScanCard extends StatelessWidget {
+// ══════════════════════════════════════════════════════════
+//  CARTE DE SCAN — avec menu "..." et volet dépliable
+// ══════════════════════════════════════════════════════════
+
+class _ScanCard extends StatefulWidget {
   final ScanRecord scan;
   final VoidCallback onTap;
-  const _ScanCard({required this.scan, required this.onTap});
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+  const _ScanCard({
+    required this.scan,
+    required this.onTap,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  @override
+  State<_ScanCard> createState() => _ScanCardState();
+}
+
+class _ScanCardState extends State<_ScanCard> {
+  bool _expanded = false;
+
+  ScanRecord get scan => widget.scan;
 
   Color get _severityColor {
     switch (scan.severity.toLowerCase()) {
@@ -590,70 +693,217 @@ class _ScanCard extends StatelessWidget {
       scan.diseaseName.toLowerCase().contains('sain') ||
           scan.diseaseName.toLowerCase().contains('healthy');
 
+  void _showMenu(BuildContext context) {
+    showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => Container(
+            margin: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: AppShadows.md),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 40, height: 4,
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(color: AppColors.border,
+                      borderRadius: BorderRadius.circular(100))),
+              _MenuAction(emoji: '✏️', label: 'Renommer',
+                  onTap: () { Navigator.pop(ctx); widget.onRename(); }),
+              _MenuAction(emoji: '🗑️', label: 'Supprimer',
+                  color: AppColors.red,
+                  onTap: () { Navigator.pop(ctx); widget.onDelete(); }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final meta = DiseaseMeta.of(scan.diseaseName);
     final date = '${scan.createdAt.day.toString().padLeft(2, '0')}/'
         '${scan.createdAt.month.toString().padLeft(2, '0')}/'
         '${scan.createdAt.year}';
     final time = '${scan.createdAt.hour.toString().padLeft(2, '0')}:'
         '${scan.createdAt.minute.toString().padLeft(2, '0')}';
 
-    return GestureDetector(
-        onTap: onTap,
-        child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.border, width: 1.5),
-                boxShadow: AppShadows.sm),
-            child: Row(children: [
-              Container(width: 48, height: 48,
-                  decoration: BoxDecoration(
-                      color: _isHealthy ? AppColors.g50 : AppColors.red2,
-                      borderRadius: BorderRadius.circular(14)),
-                  child: Center(child: Text(
-                      scan.plantType.toLowerCase().contains('maïs') ||
-                          scan.plantType.toLowerCase().contains('maize') ? '🌽' : '🍅',
-                      style: const TextStyle(fontSize: 24)))),
-              const SizedBox(width: 14),
-              Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(scan.diseaseName, style: GoogleFonts.nunito(
-                    fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.t1)),
-                const SizedBox(height: 3),
-                Row(children: [
-                  Text(scan.plantType, style: GoogleFonts.nunitoSans(
-                      fontSize: 12, color: AppColors.t3)),
-                  const SizedBox(width: 8),
-                  Text('·', style: GoogleFonts.nunitoSans(color: AppColors.t4)),
-                  const SizedBox(width: 8),
-                  Text('$date à $time', style: GoogleFonts.nunitoSans(
-                      fontSize: 12, color: AppColors.t3)),
+    final hasLabel = scan.customLabel != null && scan.customLabel!.trim().isNotEmpty;
+    final title = hasLabel ? scan.customLabel! : diseaseDisplayName(scan.diseaseName);
+
+    return Container(
+        decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border, width: 1.5),
+            boxShadow: AppShadows.sm),
+        clipBehavior: Clip.antiAlias,
+        child: Column(children: [
+          Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                GestureDetector(
+                    onTap: widget.onTap,
+                    child: Container(width: 48, height: 48,
+                        decoration: BoxDecoration(
+                            color: meta.color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(14)),
+                        child: Center(child: Text(
+                            plantDisplayName(scan.plantType) == 'Maïs' ? '🌽' : '🍅',
+                            style: const TextStyle(fontSize: 24))))),
+                const SizedBox(width: 14),
+                Expanded(child: GestureDetector(
+                    onTap: widget.onTap,
+                    behavior: HitTestBehavior.opaque,
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(title, style: GoogleFonts.nunito(
+                          fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.t1),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (hasLabel) ...[
+                        const SizedBox(height: 2),
+                        Row(children: [
+                          const Text('🔬', style: TextStyle(fontSize: 11)),
+                          const SizedBox(width: 4),
+                          Expanded(child: Text(diseaseDisplayName(scan.diseaseName),
+                              style: GoogleFonts.nunitoSans(fontSize: 11.5, color: AppColors.t3),
+                              maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        ]),
+                      ],
+                      const SizedBox(height: 3),
+                      Row(children: [
+                        Text(plantDisplayName(scan.plantType), style: GoogleFonts.nunitoSans(
+                            fontSize: 12, color: AppColors.t3)),
+                        const SizedBox(width: 8),
+                        Text('·', style: GoogleFonts.nunitoSans(color: AppColors.t4)),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('$date à $time', style: GoogleFonts.nunitoSans(
+                            fontSize: 12, color: AppColors.t3),
+                            overflow: TextOverflow.ellipsis)),
+                      ]),
+                    ]))),
+                const SizedBox(width: 8),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: _severityColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(100),
+                          border: Border.all(color: _severityColor.withOpacity(0.35))),
+                      child: Text(_isHealthy ? 'Saine' : scan.severity,
+                          style: GoogleFonts.nunito(fontSize: 11,
+                              fontWeight: FontWeight.w700, color: _severityColor))),
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Text('${(scan.confidence * 100).round()}%',
+                        style: GoogleFonts.nunito(fontSize: 12,
+                            fontWeight: FontWeight.w700, color: AppColors.t2)),
+                    const SizedBox(width: 4),
+                    Icon(scan.synced ? Icons.cloud_done_rounded : Icons.cloud_off_rounded,
+                        size: 14, color: scan.synced ? AppColors.green : AppColors.t4),
+                  ]),
                 ]),
+                const SizedBox(width: 4),
+                GestureDetector(
+                    onTap: () => _showMenu(context),
+                    behavior: HitTestBehavior.opaque,
+                    child: const Padding(
+                        padding: EdgeInsets.all(2),
+                        child: Icon(Icons.more_vert_rounded, size: 18, color: AppColors.t3))),
               ])),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                        color: _severityColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(100),
-                        border: Border.all(color: _severityColor.withOpacity(0.35))),
-                    child: Text(_isHealthy ? 'Saine' : scan.severity,
-                        style: GoogleFonts.nunito(fontSize: 11,
-                            fontWeight: FontWeight.w700, color: _severityColor))),
-                const SizedBox(height: 6),
-                Row(children: [
-                  Text('${(scan.confidence * 100).round()}%',
-                      style: GoogleFonts.nunito(fontSize: 12,
-                          fontWeight: FontWeight.w700, color: AppColors.t2)),
-                  const SizedBox(width: 4),
-                  Icon(scan.synced ? Icons.cloud_done_rounded : Icons.cloud_off_rounded,
-                      size: 14, color: scan.synced ? AppColors.green : AppColors.t4),
-                ]),
-              ]),
-            ])));
+
+          // ── Chevron : déplier / replier ──────────────────
+          InkWell(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  decoration: const BoxDecoration(border: Border(
+                      top: BorderSide(color: AppColors.surface2, width: 1))),
+                  child: Icon(_expanded
+                      ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                      size: 20, color: AppColors.t4))),
+
+          // ── Contenu déplié ────────────────────────────────
+          if (_expanded)
+            Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _detailRow('📅', 'Date complète', '$date à $time'),
+                  _detailRow('🧠', 'Modèle IA',
+                      scan.modelUsed.isEmpty ? '—' : scan.modelUsed),
+                  _detailRow('🌱', 'Culture', plantDisplayName(scan.plantType)),
+                  _detailRow('☁️', 'Synchronisation',
+                      scan.synced ? 'Synchronisé' : 'En attente'),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(child: OutlinedButton.icon(
+                        onPressed: widget.onTap,
+                        icon: const Icon(Icons.science_rounded, size: 16),
+                        label: Text('Diagnostic', style: GoogleFonts.nunito(
+                            fontSize: 12.5, fontWeight: FontWeight.w700)),
+                        style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.g700,
+                            side: const BorderSide(color: AppColors.g300, width: 1.5),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12))))),
+                    if (!_isHealthy) ...[
+                      const SizedBox(width: 10),
+                      Expanded(child: ElevatedButton.icon(
+                          onPressed: () => Navigator.push(context, MaterialPageRoute(
+                              builder: (_) => RecommendationsScreen(
+                                diseaseName  : scan.diseaseName,
+                                plantName    : plantDisplayName(scan.plantType),
+                                severityLevel: scan.severity,
+                                confidence   : scan.confidence,
+                              ))),
+                          icon: const Text('💊', style: TextStyle(fontSize: 14)),
+                          label: Text('Recommandations', style: GoogleFonts.nunito(
+                              fontSize: 12.5, fontWeight: FontWeight.w800, color: Colors.white)),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: meta.color, elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12))))),
+                    ],
+                  ]),
+                ])),
+        ]));
   }
+
+  Widget _detailRow(String emoji, String label, String value) => Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(children: [
+        Text(emoji, style: const TextStyle(fontSize: 14)),
+        const SizedBox(width: 10),
+        Expanded(child: Text(label, style: GoogleFonts.nunito(
+            fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.t2))),
+        Text(value, style: GoogleFonts.nunito(
+            fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.t1)),
+      ]));
+}
+
+class _MenuAction extends StatelessWidget {
+  final String emoji, label;
+  final Color? color;
+  final VoidCallback onTap;
+  const _MenuAction({required this.emoji, required this.label,
+    this.color, required this.onTap});
+  @override
+  Widget build(BuildContext context) => InkWell(
+      onTap: onTap,
+      child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          child: Row(children: [
+            Container(width: 36, height: 36,
+                decoration: BoxDecoration(
+                    color: (color ?? AppColors.g700).withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Center(child: Text(emoji, style: const TextStyle(fontSize: 17)))),
+            const SizedBox(width: 14),
+            Text(label, style: GoogleFonts.nunito(fontSize: 14,
+                fontWeight: FontWeight.w700, color: color ?? AppColors.t1)),
+          ])));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -748,7 +998,6 @@ class _TrendChartPainter extends CustomPainter {
     }
 
     if (maxVal == 0) {
-      // Aucune donnée — afficher juste la grille + labels
       _drawLabels(canvas, size, chartHeight);
       return;
     }

@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../services/supabase_service.dart';
 import '../services/database_service.dart';
 import '../services/token_service.dart';
+import 'app_shell.dart';
 
 // ══════════════════════════════════════════════════════════
 //  LOGIN SCREEN
@@ -185,13 +186,14 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  // ── Navigue vers l'app principale en vidant toute la pile
+  //    de navigation (Splash/Login ne doivent plus être
+  //    accessibles via le bouton retour) ──────────────────
   void _navigateHome() {
-    // Retourner à l'écran précédent ou aller au root
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    } else {
-      Navigator.pushReplacementNamed(context, '/');
-    }
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AppShell()),
+          (route) => false,
+    );
   }
 
   void _setLoading(bool v) {

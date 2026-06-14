@@ -15,7 +15,7 @@ class DatabaseService {
 
   static Database? _db;
   static const String _dbName    = 'agriscan.db';
-  static const int    _dbVersion = 2;
+  static const int    _dbVersion = 3;
   static const _uuid  = Uuid();
 
   // ── Accès base de données ─────────────────────────────
@@ -64,6 +64,43 @@ class DatabaseService {
       try {
         await db.execute('ALTER TABLE scans ADD COLUMN custom_label TEXT');
       } catch (_) {}
+    }
+
+    if (oldVersion < 3) {
+      // Table des conversations (chat multi-fils, façon ChatGPT/AgroVoice)
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+          id         TEXT PRIMARY KEY,
+          title      TEXT,
+          created_at TEXT,
+          updated_at TEXT
+        )
+      ''');
+
+      try {
+        await db.execute('ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT');
+      } catch (_) {}
+
+      // Migrer les anciens messages (sans conversation_id) vers une
+      // conversation "legacy" pour ne pas perdre l'historique existant
+      final orphans = await db.query(
+        'chat_messages',
+        where: 'conversation_id IS NULL OR conversation_id = ?',
+        whereArgs: [''],
+      );
+      if (orphans.isNotEmpty) {
+        final legacyId = 'legacy-${DateTime.now().millisecondsSinceEpoch}';
+        final now = DateTime.now().toIso8601String();
+        await db.insert('chat_conversations', {
+          'id'        : legacyId,
+          'title'     : 'Conversation précédente',
+          'created_at': now,
+          'updated_at': now,
+        });
+        await db.update('chat_messages', {'conversation_id': legacyId},
+            where: 'conversation_id IS NULL OR conversation_id = ?',
+            whereArgs: ['']);
+      }
     }
   }
 
@@ -138,11 +175,21 @@ class DatabaseService {
 
     await db.execute('''
       CREATE TABLE chat_messages (
+        id              TEXT PRIMARY KEY,
+        conversation_id TEXT,
+        role            TEXT,
+        content         TEXT,
+        sources         TEXT,
+        created_at      TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE chat_conversations (
         id         TEXT PRIMARY KEY,
-        role       TEXT,
-        content    TEXT,
-        sources    TEXT,
-        created_at TEXT
+        title      TEXT,
+        created_at TEXT,
+        updated_at TEXT
       )
     ''');
   }
@@ -293,6 +340,25 @@ class DatabaseService {
     return id;
   }
 
+  // ── Met à jour un scan existant avec le résultat réel du
+  //    pipeline ML (appelé depuis AnalyzingScreen une fois
+  //    la classification terminée) ────────────────────────
+  Future<void> updateScanResult({
+    required String scanId,
+    required String diseaseName,
+    required String severity,
+    required double confidence,
+    required String modelUsed,
+  }) async {
+    final database = await db;
+    await database.update('scans', {
+      'disease_name': diseaseName,
+      'severity'    : severity,
+      'confidence'  : confidence,
+      'model_used'  : modelUsed,
+    }, where: 'id = ?', whereArgs: [scanId]);
+  }
+
   Future<List<ScanRecord>> getScans({
     String? userId,
     int limit = 50,
@@ -340,6 +406,19 @@ class DatabaseService {
     final database = await db;
     await database.delete('scans', where: 'id = ?', whereArgs: [scanId]);
     await database.delete('recommendations', where: 'scan_id = ?', whereArgs: [scanId]);
+  }
+
+  // ── Nettoyage des scans "fantômes" laissés par d'anciennes
+  //    versions (placeholder "En cours..." jamais mis à jour
+  //    suite à un crash/interruption avant le fix ci-dessus).
+  //    Retourne le nombre de lignes supprimées. ────────────
+  Future<int> cleanupGhostScans() async {
+    final database = await db;
+    return await database.delete(
+      'scans',
+      where: "disease_name = ? OR disease_name = ''",
+      whereArgs: ['En cours...'],
+    );
   }
 
   // ══════════════════════════════════════════════════════

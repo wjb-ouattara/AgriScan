@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
 import '../theme/app_theme.dart';
 import '../services/database_service.dart';
 import '../services/chat_service.dart';
 import '../services/knowledge_base_service.dart';
 import '../utils/disease_meta.dart';
-import 'knowledge_base_screen.dart';
+import 'chat_history_drawer.dart';
 
 // ══════════════════════════════════════════════════════════
 //  CHAT SCREEN
-//  Assistant agronome conversationnel — texte uniquement
-//  pour cette version. Contextualisé (profil agricole +
-//  dernier diagnostic) et appuyé sur la base RAG.
+//  Assistant agronome conversationnel — multi-conversations
+//  (panneau latéral façon ChatGPT) + saisie vocale (FR).
+//  Contextualisé (profil agricole + dernier diagnostic) et
+//  appuyé sur la base RAG.
 // ══════════════════════════════════════════════════════════
 
 class ChatScreen extends StatefulWidget {
@@ -27,13 +29,20 @@ class _ChatScreenState extends State<ChatScreen> {
   final _kb   = KnowledgeBaseService();
   static const _uuid = Uuid();
 
-  final _controller       = TextEditingController();
-  final _scrollController = ScrollController();
+  final _scaffoldKey       = GlobalKey<ScaffoldState>();
+  final _controller        = TextEditingController();
+  final _scrollController  = ScrollController();
+  final _speech            = SpeechToText();
 
   List<ChatMessage> _messages = [];
+  List<ChatConversation> _conversations = [];
   List<KnowledgeDocument> _allDocs = [];
+  String? _conversationId;
+
   bool _loading = true;
   bool _sending = false;
+  bool _speechAvailable = false;
+  bool _listening = false;
 
   String _userName = 'Agriculteur';
   String _region   = 'Maroc';
@@ -53,6 +62,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
+    _speech.stop();
     super.dispose();
   }
 
@@ -61,12 +71,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadContext();
     await _loadLastScan();
     _allDocs = await _kb.getAllDocuments();
-    final history = await _chat.loadHistory();
-    if (mounted) setState(() {
-      _messages = history;
-      _loading  = false;
-    });
-    _scrollToBottom(animated: false);
+    await _loadConversations();
+    await _initSpeech();
+    if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _loadContext() async {
@@ -117,34 +124,145 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // ── Suggestions affichées quand la conversation est vide ──
-  List<String> get _suggestions {
-    final list = <String>[];
+  String get _cultureEmoji {
+    final c = _culture.toLowerCase();
+    if (c.contains('maïs') || c.contains('maize')) return '🌽';
+    if (c.contains('tomate') || c.contains('tomato')) return '🍅';
+    return '🌱';
+  }
+
+  // ── Suggestions : toujours 4, en grille 2x2.
+  //    Si un diagnostic récent est malade, il prend la 1ère place. ──
+  List<_Suggestion> get _suggestions {
+    final list = <_Suggestion>[];
     if (_lastScan != null) {
       final meta = DiseaseMeta.of(_lastScan!.diseaseName);
       if (!meta.isHealthy) {
-        list.add('Comment traiter ${meta.labelFr.toLowerCase()} '
-            'sur mon ${_culture.toLowerCase()} ?');
+        list.add(_Suggestion(
+          emoji : meta.emoji,
+          label : 'Traiter ma\n${meta.labelFr}',
+          prompt: 'Comment traiter ${meta.labelFr.toLowerCase()} '
+              'sur mon ${_culture.toLowerCase()} ?',
+          accent: meta.color,
+        ));
       }
     }
-    list.addAll([
-      'Quand semer le maïs cette saison ?',
-      'Comment fertiliser mon champ ?',
-      'Quels sont les signes d\'un maïs sain ?',
-    ]);
-    return list;
+    const generic = [
+      _Suggestion(emoji: '📅', label: 'Calendrier\nde semis',
+          prompt: 'Quand semer le maïs cette saison ?'),
+      _Suggestion(emoji: '💧', label: 'Irrigation\noptimale',
+          prompt: 'Comment bien irriguer mon champ ce mois-ci ?'),
+      _Suggestion(emoji: '🌡️', label: 'Risque de\ngel',
+          prompt: 'Y a-t-il un risque de gel cette nuit pour mes cultures ?'),
+      _Suggestion(emoji: '🌿', label: 'Maïs sain :\nles signes',
+          prompt: 'Quels sont les signes d\'un maïs en bonne santé ?'),
+    ];
+    for (final g in generic) {
+      if (list.length >= 4) break;
+      list.add(g);
+    }
+    return list.take(4).toList();
+  }
+
+  // ════════════════════════════════════════════════════
+  //  CONVERSATIONS
+  // ════════════════════════════════════════════════════
+  Future<void> _loadConversations() async {
+    final list = await _chat.listConversations();
+    if (mounted) setState(() => _conversations = list);
+  }
+
+  Future<void> _openConversation(String id) async {
+    final messages = await _chat.loadMessages(id);
+    if (mounted) {
+      setState(() {
+        _conversationId = id;
+        _messages = messages;
+      });
+    }
+    _scrollToBottom(animated: false);
+  }
+
+  void _startNewConversation() {
+    if (_listening) _toggleListening();
+    setState(() {
+      _conversationId = null;
+      _messages = [];
+    });
+  }
+
+  Future<void> _renameConversation(ChatConversation conv) async {
+    final ctrl = TextEditingController(text: conv.title);
+    final result = await showDialog<String?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Renommer la conversation', style: GoogleFonts.nunito(
+                fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.g900)),
+            content: TextField(
+                controller: ctrl, autofocus: true,
+                style: GoogleFonts.nunitoSans(fontSize: 14),
+                decoration: InputDecoration(
+                    hintText: 'Ex : Traitement maïs - Champ Nord',
+                    hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12))),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, null),
+                  child: const Text('Annuler')),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.g700, elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                  child: const Text('Enregistrer', style: TextStyle(color: Colors.white))),
+            ]));
+    if (result == null || result.isEmpty) return;
+    await _chat.renameConversation(conv.id, result);
+    await _loadConversations();
+  }
+
+  Future<void> _deleteConversation(ChatConversation conv) async {
+    final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Text('Supprimer cette conversation ?', style: GoogleFonts.nunito(
+                fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.g900)),
+            content: Text('Cette action est irréversible.',
+                style: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t2)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Annuler')),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.red, elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Supprimer', style: TextStyle(color: Colors.white))),
+            ]));
+    if (confirm != true) return;
+    await _chat.deleteConversation(conv.id);
+    if (_conversationId == conv.id) {
+      setState(() { _conversationId = null; _messages = []; });
+    }
+    await _loadConversations();
   }
 
   // ── Envoi ──────────────────────────────────────────────
   Future<void> _send([String? quick]) async {
     final text = (quick ?? _controller.text).trim();
     if (text.isEmpty || _sending) return;
+    if (_listening) await _toggleListening();
+
+    final convId = _conversationId ?? await _chat.createConversation();
 
     final history = List<ChatMessage>.from(_messages);
     final userMsg = ChatMessage(
         id: _uuid.v4(), role: 'user', content: text, createdAt: DateTime.now());
 
     setState(() {
+      _conversationId = convId;
       _messages.add(userMsg);
       _sending = true;
     });
@@ -152,38 +270,14 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     final reply = await _chat.sendMessage(
-        text: text, history: history, context: _buildContext());
+        conversationId: convId, text: text, history: history, context: _buildContext());
 
     if (mounted) setState(() {
       _messages.add(reply);
       _sending = false;
     });
     _scrollToBottom();
-  }
-
-  Future<void> _newConversation() async {
-    final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: Text('Nouvelle conversation', style: GoogleFonts.nunito(
-                fontWeight: FontWeight.w800)),
-            content: Text('L\'historique actuel sera effacé. Continuer ?',
-                style: GoogleFonts.nunitoSans(fontSize: 14)),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Annuler')),
-              ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.g700, elevation: 0),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Effacer',
-                      style: TextStyle(color: Colors.white))),
-            ]));
-    if (confirm == true) {
-      await _chat.clearHistory();
-      if (mounted) setState(() => _messages = []);
-    }
+    await _loadConversations();
   }
 
   void _scrollToBottom({bool animated = true}) {
@@ -197,6 +291,47 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollController.jumpTo(pos);
       }
     });
+  }
+
+  // ════════════════════════════════════════════════════
+  //  SAISIE VOCALE (speech-to-text, FR)
+  // ════════════════════════════════════════════════════
+  Future<void> _initSpeech() async {
+    try {
+      final available = await _speech.initialize(
+        onStatus: (status) {
+          if ((status == 'done' || status == 'notListening') && mounted) {
+            setState(() => _listening = false);
+          }
+        },
+        onError: (_) {
+          if (mounted) setState(() => _listening = false);
+        },
+      );
+      _speechAvailable = available;
+    } catch (_) {
+      _speechAvailable = false;
+    }
+  }
+
+  Future<void> _toggleListening() async {
+    if (!_speechAvailable || _sending) return;
+    if (_listening) {
+      await _speech.stop();
+      if (mounted) setState(() => _listening = false);
+    } else {
+      setState(() => _listening = true);
+      await _speech.listen(
+          localeId: 'fr_FR',
+          onResult: (result) {
+            if (!mounted) return;
+            setState(() {
+              _controller.text = result.recognizedWords;
+              _controller.selection = TextSelection.collapsed(
+                  offset: _controller.text.length);
+            });
+          });
+    }
   }
 
   // ── Affiche le contenu d'une source RAG ────────────────
@@ -238,9 +373,19 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.bg,
+      drawer: ChatHistoryDrawer(
+        conversations: _conversations,
+        activeId: _conversationId,
+        onNewConversation: _startNewConversation,
+        onOpenConversation: _openConversation,
+        onRename: _renameConversation,
+        onDelete: _deleteConversation,
+      ),
       body: SafeArea(child: Column(children: [
         _buildHeader(),
+        if (_listening) _buildListeningBanner(),
         Expanded(child: _loading
             ? const Center(child: CircularProgressIndicator(color: AppColors.g600))
             : _messages.isEmpty
@@ -259,7 +404,7 @@ class _ChatScreenState extends State<ChatScreen> {
               begin: Alignment.topLeft, end: Alignment.bottomRight,
               colors: [Color(0xFF1E3820), Color(0xFF2D5A30)])),
       child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
           child: Column(children: [
             Row(children: [
               GestureDetector(
@@ -269,25 +414,32 @@ class _ChatScreenState extends State<ChatScreen> {
                           color: Colors.white.withOpacity(0.12), shape: BoxShape.circle),
                       child: const Icon(Icons.arrow_back_ios_new_rounded,
                           size: 16, color: Colors.white))),
+              const SizedBox(width: 8),
+              GestureDetector(
+                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                  child: Container(width: 40, height: 40,
+                      decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.12), shape: BoxShape.circle),
+                      child: const Icon(Icons.menu_rounded,
+                          size: 19, color: Colors.white))),
               const SizedBox(width: 12),
               Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('Assistant Agronome IA', style: GoogleFonts.nunito(
-                    fontSize: 17, fontWeight: FontWeight.w900, color: Colors.white)),
-                Text('Propulsé par AgriScan · ${_culture}',
+                    fontSize: 16, fontWeight: FontWeight.w900, color: Colors.white),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text('Propulsé par AgriScan · $_culture',
                     style: GoogleFonts.nunitoSans(fontSize: 12,
-                        color: Colors.white.withOpacity(0.7))),
+                        color: Colors.white.withOpacity(0.7)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
               ])),
-              IconButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => const KnowledgeBaseScreen())),
-                  icon: const Icon(Icons.menu_book_rounded,
-                      color: Colors.white, size: 22)),
-              IconButton(
-                  onPressed: _messages.isEmpty ? null : _newConversation,
-                  icon: Icon(Icons.add_comment_rounded,
-                      color: _messages.isEmpty
-                          ? Colors.white.withOpacity(0.3) : Colors.white, size: 22)),
+              GestureDetector(
+                  onTap: _startNewConversation,
+                  child: Container(width: 40, height: 40,
+                      decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.12), shape: BoxShape.circle),
+                      child: const Icon(Icons.add_comment_rounded,
+                          size: 18, color: Colors.white))),
             ]),
             const SizedBox(height: 12),
             Row(children: [
@@ -313,55 +465,58 @@ class _ChatScreenState extends State<ChatScreen> {
             overflow: TextOverflow.ellipsis)),
       ])));
 
-  // ── État vide ────────────────────────────────────────────
-  Widget _buildEmptyState() => SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      child: Column(children: [
-        Container(width: 88, height: 88,
-            decoration: BoxDecoration(
-                color: AppColors.g50, shape: BoxShape.circle,
-                border: Border.all(color: AppColors.g300, width: 1.5)),
-            child: const Center(child: Text('🌾', style: TextStyle(fontSize: 40)))),
-        const SizedBox(height: 20),
-        Text('Bonjour, $_userName 👋', style: GoogleFonts.nunito(
-            fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.g900)),
-        const SizedBox(height: 8),
-        Text('Posez votre question agronomique. Je connais votre contexte '
-            'agricole et vos derniers diagnostics AgriScan.',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.nunitoSans(fontSize: 13.5, color: AppColors.t3, height: 1.5)),
-        const SizedBox(height: 24),
-        if (_lastScan != null) _buildLastScanBanner(),
-        const SizedBox(height: 16),
-        Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
-            children: _suggestions.map((s) => _SuggestionChip(
-                text: s, onTap: () => _send(s))).toList()),
+  // ── Bandeau "écoute en cours" ────────────────────────────
+  Widget _buildListeningBanner() => Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      color: AppColors.red.withOpacity(0.08),
+      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        _PulsingDot(),
+        const SizedBox(width: 8),
+        Text('Je vous écoute… parlez maintenant', style: GoogleFonts.nunito(
+            fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.red)),
       ]));
 
-  Widget _buildLastScanBanner() {
-    final meta = DiseaseMeta.of(_lastScan!.diseaseName);
-    return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-            color: meta.color.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: meta.color.withOpacity(0.25))),
-        child: Row(children: [
-          Text(meta.emoji, style: const TextStyle(fontSize: 22)),
-          const SizedBox(width: 12),
-          Expanded(child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Dernier diagnostic', style: GoogleFonts.nunito(
-                fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.t3,
-                letterSpacing: 0.5)),
-            Text(meta.labelFr, style: GoogleFonts.nunito(
-                fontSize: 14, fontWeight: FontWeight.w800, color: meta.color)),
-          ])),
-          Text('${(_lastScan!.confidence * 100).round()}%', style: GoogleFonts.nunito(
-              fontSize: 14, fontWeight: FontWeight.w800, color: meta.color)),
-        ]));
-  }
+  // ── État vide — refonte "WOW" ────────────────────────────
+  Widget _buildEmptyState() => SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+      child: Column(children: [
+        _GlowOrb(emoji: _cultureEmoji),
+        const SizedBox(height: 18),
+        Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ShaderMask(
+                  blendMode: BlendMode.srcIn,
+                  shaderCallback: (bounds) => const LinearGradient(
+                    colors: [AppColors.g900, AppColors.g600],
+                    begin: Alignment.centerLeft, end: Alignment.centerRight,
+                  ).createShader(bounds),
+                  child: Text('Bonjour, $_userName', style: GoogleFonts.nunito(
+                      fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white))),
+              const SizedBox(width: 8),
+              const Text('👋', style: TextStyle(fontSize: 24)),
+            ]),
+        const SizedBox(height: 6),
+        Text('Par texte ou à l\'oral — je connais votre contexte agricole.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t3)),
+        const SizedBox(height: 28),
+        Row(children: [
+          Expanded(child: _SuggestionCard(
+              s: _suggestions[0], onTap: () => _send(_suggestions[0].prompt))),
+          const SizedBox(width: 10),
+          Expanded(child: _SuggestionCard(
+              s: _suggestions[1], onTap: () => _send(_suggestions[1].prompt))),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(child: _SuggestionCard(
+              s: _suggestions[2], onTap: () => _send(_suggestions[2].prompt))),
+          const SizedBox(width: 10),
+          Expanded(child: _SuggestionCard(
+              s: _suggestions[3], onTap: () => _send(_suggestions[3].prompt))),
+        ]),
+      ]));
 
   // ── Liste de messages ────────────────────────────────────
   Widget _buildMessageList() => ListView.builder(
@@ -392,58 +547,165 @@ class _ChatScreenState extends State<ChatScreen> {
             ])),
       ]));
 
-  // ── Barre de saisie ───────────────────────────────────────
+  // ── Barre de saisie — bouton qui morph micro ↔ envoi ─────
   Widget _buildInputBar() => Container(
       padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + MediaQuery.of(context).padding.bottom),
       decoration: const BoxDecoration(
           color: AppColors.surface,
           border: Border(top: BorderSide(color: AppColors.border, width: 1.5))),
-      child: Row(children: [
-        Expanded(child: TextField(
-            controller: _controller,
-            minLines: 1, maxLines: 4,
-            textInputAction: TextInputAction.send,
-            onSubmitted: (_) => _send(),
-            style: GoogleFonts.nunitoSans(fontSize: 14, color: AppColors.t1),
-            decoration: InputDecoration(
-                hintText: 'Posez votre question agronomique...',
-                hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
-                filled: true, fillColor: AppColors.surface2,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none)))),
-        const SizedBox(width: 8),
-        GestureDetector(
-            onTap: _sending ? null : () => _send(),
-            child: Container(width: 46, height: 46,
-                decoration: BoxDecoration(
-                    color: _sending ? AppColors.surface2 : AppColors.g700,
-                    shape: BoxShape.circle),
-                child: Icon(Icons.send_rounded,
-                    color: _sending ? AppColors.t4 : Colors.white, size: 20))),
-      ]));
+      child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final hasText = _controller.text.trim().isNotEmpty;
+            final showMic = !hasText && _speechAvailable;
+
+            return Row(children: [
+              Expanded(child: TextField(
+                  controller: _controller,
+                  minLines: 1, maxLines: 4,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  style: GoogleFonts.nunitoSans(fontSize: 14, color: AppColors.t1),
+                  decoration: InputDecoration(
+                      hintText: _listening
+                          ? 'Parlez maintenant...'
+                          : 'Posez votre question agronomique...',
+                      hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
+                      filled: true, fillColor: AppColors.surface2,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none)))),
+              const SizedBox(width: 8),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                transitionBuilder: (child, anim) => ScaleTransition(
+                    scale: anim, child: FadeTransition(opacity: anim, child: child)),
+                child: showMic
+                    ? GestureDetector(
+                    key: const ValueKey('mic'),
+                    onTap: _sending ? null : _toggleListening,
+                    child: Container(width: 46, height: 46,
+                        decoration: BoxDecoration(
+                            color: _listening
+                                ? AppColors.red.withOpacity(0.1) : AppColors.g700,
+                            shape: BoxShape.circle,
+                            border: _listening
+                                ? Border.all(color: AppColors.red, width: 1.5) : null),
+                        child: Icon(_listening
+                            ? Icons.mic_rounded : Icons.mic_none_rounded,
+                            color: _listening ? AppColors.red : Colors.white, size: 20)))
+                    : GestureDetector(
+                    key: const ValueKey('send'),
+                    onTap: (hasText && !_sending) ? () => _send() : null,
+                    child: Container(width: 46, height: 46,
+                        decoration: BoxDecoration(
+                            color: (hasText && !_sending)
+                                ? AppColors.g700 : AppColors.surface2,
+                            shape: BoxShape.circle),
+                        child: Icon(Icons.send_rounded,
+                            color: (hasText && !_sending)
+                                ? Colors.white : AppColors.t4, size: 20))),
+              ),
+            ]);
+          }));
 }
 
 // ══════════════════════════════════════════════════════════
 //  WIDGETS HELPERS
 // ══════════════════════════════════════════════════════════
 
-class _SuggestionChip extends StatelessWidget {
-  final String text;
+// ── Données d'une carte de suggestion ───────────────────────
+class _Suggestion {
+  final String emoji, label, prompt;
+  final Color? accent;
+  const _Suggestion({
+    required this.emoji, required this.label, required this.prompt, this.accent,
+  });
+}
+
+// ── Carte de suggestion (grille 2x2) ────────────────────────
+class _SuggestionCard extends StatelessWidget {
+  final _Suggestion s;
   final VoidCallback onTap;
-  const _SuggestionChip({required this.text, required this.onTap});
+  const _SuggestionCard({required this.s, required this.onTap});
+
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
       child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          height: 92,
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
               color: AppColors.surface,
-              borderRadius: BorderRadius.circular(100),
-              border: Border.all(color: AppColors.border, width: 1.5),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                  color: s.accent != null
+                      ? s.accent!.withOpacity(0.35) : AppColors.border,
+                  width: 1.5),
               boxShadow: AppShadows.sm),
-          child: Text(text, style: GoogleFonts.nunito(
-              fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.g700))));
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(width: 32, height: 32,
+                    decoration: BoxDecoration(
+                        color: (s.accent ?? AppColors.g700).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Center(child: Text(s.emoji, style: const TextStyle(fontSize: 16)))),
+                Text(s.label, style: GoogleFonts.nunito(
+                    fontSize: 12.5, fontWeight: FontWeight.w800, height: 1.2,
+                    color: s.accent ?? AppColors.g700),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+              ])));
+}
+
+// ── Orbe animée pulsante (icône culture) ────────────────────
+class _GlowOrb extends StatefulWidget {
+  final String emoji;
+  const _GlowOrb({required this.emoji});
+  @override
+  State<_GlowOrb> createState() => _GlowOrbState();
+}
+
+class _GlowOrbState extends State<_GlowOrb> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 2400))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        final t = _ctrl.value;
+        return SizedBox(width: 136, height: 136,
+            child: Stack(alignment: Alignment.center, children: [
+              Container(width: 120 + 16 * t, height: 120 + 16 * t,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                      gradient: RadialGradient(colors: [
+                        AppColors.g300.withOpacity(0.35 - 0.15 * t),
+                        Colors.transparent,
+                      ]))),
+              Container(width: 100, height: 100,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.g50,
+                      border: Border.all(color: AppColors.g300, width: 1.5),
+                      boxShadow: AppShadows.md),
+                  child: Center(child: Text(widget.emoji,
+                      style: const TextStyle(fontSize: 44)))),
+            ]));
+      });
 }
 
 class _MessageBubble extends StatelessWidget {
@@ -503,4 +765,35 @@ class _MessageBubble extends StatelessWidget {
               ],
             ]));
   }
+}
+
+// ── Petit point rouge pulsant (indicateur d'écoute) ─────────
+class _PulsingDot extends StatefulWidget {
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 700))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+      opacity: Tween(begin: 0.3, end: 1.0).animate(_ctrl),
+      child: Container(width: 8, height: 8,
+          decoration: const BoxDecoration(
+              color: AppColors.red, shape: BoxShape.circle)));
 }

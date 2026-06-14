@@ -158,15 +158,18 @@ class _AnalyzingScreenState extends State<AnalyzingScreen>
     });
   }
 
+  // ── Met à jour l'enregistrement "En cours..." créé par
+  //    ScannerScreen avec le résultat réel de la prédiction
+  //    (au lieu de laisser un placeholder fantôme). ────────
   Future<void> _updateScanResult(DiseaseDetectionResult result) async {
-    final db = DatabaseService();
-    final allScans = await db.getScans(limit: 1);
-    // Mettre à jour le dernier scan avec les vrais résultats
-    if (allScans.isNotEmpty) {
-      final scan = allScans.first;
-      // La BD ne supporte pas update direct — on recrée
-      // (amélioration future : ajouter updateScan())
-    }
+    if (widget.scanId == null) return;
+    await DatabaseService().updateScanResult(
+      scanId     : widget.scanId!,
+      diseaseName: result.diseaseName,
+      severity   : result.severityLabel,
+      confidence : result.confidence,
+      modelUsed  : result.modelUsed.displayName,
+    );
   }
 
   DiseaseDetectionResult _demoResult() {
