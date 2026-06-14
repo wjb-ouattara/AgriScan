@@ -49,6 +49,10 @@ dependencies:
   file_picker: ^8.1.2
   speech_to_text: ^7.0.0
 
+  #llm
+  flutter_gemma: ^0.16.4
+  connectivity_plus: ^6.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

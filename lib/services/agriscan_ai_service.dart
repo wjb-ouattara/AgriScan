@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/secrets.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'gemma_service.dart'; // N'oublie pas d'importer ton IA locale !
 
 // ══════════════════════════════════════════════════════════
 //  AGRISCAN AI SERVICE
@@ -22,7 +24,7 @@ class AgriScanAIService {
   final Map<String, AIRecommendation> _cache = {};
 
   // ══════════════════════════════════════════════════════
-  //  ANALYSE PRINCIPALE
+  //  ANALYSE PRINCIPALE (HYBRIDE : GROQ + GEMMA LOCAL)
   // ══════════════════════════════════════════════════════
 
   Future<AIRecommendation> analyzeDisease({
@@ -43,44 +45,96 @@ class AgriScanAIService {
       region    : region,
     );
 
-    try {
-      final response = await http.post(
-        Uri.parse(_url),
-        headers: {
-          'Content-Type' : 'application/json',
-          'Authorization': 'Bearer $_key',
-        },
-        body: jsonEncode({
-          'model'          : _model,
-          'messages'       : [
-            {'role': 'user', 'content': prompt}
-          ],
-          'temperature'    : 0.3,
-          'max_tokens'     : 2048,
-          'response_format': {'type': 'json_object'},
-        }),
-      ).timeout(const Duration(seconds: 30));
+    // 1. Vérification de la connexion
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
+        connectivityResult.contains(ConnectivityResult.wifi);
 
-      if (response.statusCode == 200) {
-        final data    = jsonDecode(response.body);
-        final rawText = data['choices'][0]['message']['content'] as String;
-        final parsed  = jsonDecode(rawText) as Map<String, dynamic>;
-        final reco    = AIRecommendation.fromJson(parsed);
-        _cache[key]   = reco;
-        return reco;
-      } else {
-        throw AIServiceException(
-            'Erreur ${response.statusCode}: ${response.body}');
+    if (isOnline) {
+      // ☁️ MODE CLOUD : API GROQ
+      print("📶 Réseau détecté : Analyse via Groq (Cloud)");
+      try {
+        final response = await http.post(
+          Uri.parse(_url),
+          headers: {
+            'Content-Type' : 'application/json',
+            'Authorization': 'Bearer $_key',
+          },
+          body: jsonEncode({
+            'model'          : _model,
+            'messages'       : [
+              {'role': 'user', 'content': prompt}
+            ],
+            'temperature'    : 0.3,
+            'max_tokens'     : 2048,
+            'response_format': {'type': 'json_object'},
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (response.statusCode == 200) {
+          final data    = jsonDecode(response.body);
+          final rawText = data['choices'][0]['message']['content'] as String;
+          final parsed  = jsonDecode(rawText) as Map<String, dynamic>;
+          final reco    = AIRecommendation.fromJson(parsed);
+          _cache[key]   = reco;
+          return reco;
+        } else {
+          throw AIServiceException('Erreur Groq ${response.statusCode}');
+        }
+      } catch (e) {
+        print("⚠️ Échec du Cloud ($e). Bascule vers le mode local de secours...");
+        return await _runLocalAnalysis(prompt, diseaseName, plantName, key);
       }
-    } on AIServiceException {
-      rethrow;
-    } catch (e) {
-      throw AIServiceException('Erreur réseau : $e');
+
+    } else {
+      // 📱 MODE HORS-LIGNE : GEMMA (Local GPU)
+      print("📴 Pas de réseau : Analyse Edge AI via Gemma sur le GPU");
+      return await _runLocalAnalysis(prompt, diseaseName, plantName, key);
     }
   }
 
   // ══════════════════════════════════════════════════════
-  //  PROMPT AGRONOMIQUE
+  //  MÉTHODE INTERNE : EXÉCUTION LOCALE (GEMMA)
+  //  Prompt allégé pour réponse rapide (~15-20s vs ~53s)
+  // ══════════════════════════════════════════════════════
+
+  Future<AIRecommendation> _runLocalAnalysis(
+      String fullPrompt,
+      String disease,
+      String plant,
+      String cacheKey
+      ) async {
+    try {
+      final gemmaService = GemmaService();
+      if (!gemmaService.isInitialized) {
+        await gemmaService.initAI();
+      }
+
+      // Prompt ALLÉGÉ pour Gemma (moins de champs = plus rapide)
+      final lightPrompt = _buildLightPrompt(
+        disease: disease,
+        plant: plant,
+      );
+
+      String rawText = await gemmaService.sendMessage(lightPrompt);
+
+      // 🧹 NETTOYAGE DU JSON
+      rawText = rawText.replaceAll('```json', '').replaceAll('```', '').trim();
+
+      final parsed = jsonDecode(rawText) as Map<String, dynamic>;
+      final reco   = AIRecommendation.fromJson(parsed);
+
+      _cache[cacheKey] = reco;
+      return reco;
+
+    } catch (e) {
+      print("❌ Erreur Gemma ou JSON invalide : $e");
+      return AIRecommendation.offline(disease, plant);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  PROMPT AGRONOMIQUE COMPLET (GROQ CLOUD)
   // ══════════════════════════════════════════════════════
 
   String _buildPrompt({
@@ -148,6 +202,36 @@ sans balises markdown, exactement dans ce format :
   },
   "weather_conditions": "Conditions météo favorisant cette maladie",
   "affected_parts": ["Feuilles", "Tiges"],
+  "severity_score": 65
+}
+''';
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  PROMPT ALLÉGÉ POUR GEMMA (LOCAL / EDGE AI)
+  //  → Moins de champs = réponse ~3x plus rapide
+  // ══════════════════════════════════════════════════════
+
+  String _buildLightPrompt({
+    required String disease,
+    required String plant,
+  }) {
+    return '''
+Maladie "$disease" détectée sur $plant. Réponds UNIQUEMENT en JSON valide :
+{
+  "disease_name_fr": "nom français",
+  "disease_name_scientific": "nom latin",
+  "description": "2 phrases max",
+  "severity_explanation": "1 phrase",
+  "urgency": "immediate",
+  "urgency_label": "Dans les 48h",
+  "treatment_steps": [{"step":1,"title":"action","description":"détail","timing":"quand"}],
+  "products": [{"name":"produit","type":"fongicide","active_ingredient":"matière","dose_per_ha":"dose","water_volume":"volume","frequency":"freq","pre_harvest_delay":"délai","availability_morocco":true,"estimated_cost_dh":"coût"}],
+  "application_schedule": [{"day":"J0","action":"action"}],
+  "prevention_tips": ["conseil1","conseil2"],
+  "economic_impact": {"yield_loss_without_treatment":"perte","treatment_cost":"coût","roi":"roi"},
+  "weather_conditions": "conditions",
+  "affected_parts": ["Feuilles"],
   "severity_score": 65
 }
 ''';

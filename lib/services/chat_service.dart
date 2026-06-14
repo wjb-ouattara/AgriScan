@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'database_service.dart';
 import 'knowledge_base_service.dart';
+import 'gemma_service.dart';
 import '../config/secrets.dart';
 
 // ══════════════════════════════════════════════════════════
@@ -203,7 +205,7 @@ class ChatService {
   }
 
   // ════════════════════════════════════════════════════
-  //  ENVOI D'UN MESSAGE
+  //  ENVOI D'UN MESSAGE (HYBRIDE : GROQ + GEMMA LOCAL)
   // ════════════════════════════════════════════════════
   Future<ChatMessage> sendMessage({
     required String conversationId,
@@ -218,54 +220,105 @@ class ChatService {
     await _maybeSetTitle(conversationId, text);
     await _touchConversation(conversationId);
 
-    // Récupération RAG
-    final relevant = await _kb.search(text, topK: 3);
-    final systemPrompt = _buildSystemPrompt(context, relevant);
-
-    final messages = <Map<String, String>>[
-      {'role': 'system', 'content': systemPrompt},
-      ...history.map((m) => {'role': m.role, 'content': m.content}),
-      {'role': 'user', 'content': text},
-    ];
+    // Vérification de la connexion
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
+        connectivityResult.contains(ConnectivityResult.wifi);
 
     String content;
-    try {
-      final response = await http.post(
-        Uri.parse(_url),
-        headers: {
-          'Content-Type' : 'application/json',
-          'Authorization': 'Bearer $_key',
-        },
-        body: jsonEncode({
-          'model'      : _model,
-          'messages'   : messages,
-          'temperature': 0.4,
-          'max_tokens' : 700,
-        }),
-      ).timeout(const Duration(seconds: 30));
+    List<String> sourceTitles = [];
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        content = (data['choices'][0]['message']['content'] as String).trim();
-      } else {
-        content = 'Désolé, je n\'ai pas pu contacter le service IA '
-            '(erreur ${response.statusCode}). Réessayez dans un instant.';
+    if (isOnline) {
+      // ☁️ MODE CLOUD : GROQ
+      print("📶 Chat : Réseau détecté → Groq (Cloud)");
+      try {
+        // Récupération RAG
+        final relevant = await _kb.search(text, topK: 3);
+        sourceTitles = relevant.map((d) => d.title).toList();
+        final systemPrompt = _buildSystemPrompt(context, relevant);
+
+        final messages = <Map<String, String>>[
+          {'role': 'system', 'content': systemPrompt},
+          ...history.map((m) => {'role': m.role, 'content': m.content}),
+          {'role': 'user', 'content': text},
+        ];
+
+        final response = await http.post(
+          Uri.parse(_url),
+          headers: {
+            'Content-Type' : 'application/json',
+            'Authorization': 'Bearer $_key',
+          },
+          body: jsonEncode({
+            'model'      : _model,
+            'messages'   : messages,
+            'temperature': 0.4,
+            'max_tokens' : 700,
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          content = (data['choices'][0]['message']['content'] as String).trim();
+        } else {
+          // Fallback vers Gemma si Groq échoue
+          print("⚠️ Groq erreur ${response.statusCode}, bascule vers Gemma...");
+          content = await _sendViaGemma(text, context);
+        }
+      } catch (e) {
+        print("⚠️ Échec Cloud ($e), bascule vers Gemma...");
+        content = await _sendViaGemma(text, context);
       }
-    } catch (e) {
-      content = 'Connexion impossible. Vérifiez votre connexion internet '
-          'et réessayez.';
+    } else {
+      // 📴 MODE HORS-LIGNE : GEMMA LOCAL
+      print("📴 Chat : Pas de réseau → Gemma (Edge AI)");
+      content = await _sendViaGemma(text, context);
     }
 
     final reply = ChatMessage(
       id        : _uuid.v4(),
       role      : 'assistant',
       content   : content,
-      sources   : relevant.map((d) => d.title).toList(),
+      sources   : sourceTitles,
       createdAt : DateTime.now(),
     );
     await _persist(conversationId, reply);
     await _touchConversation(conversationId);
     return reply;
+  }
+
+  // ════════════════════════════════════════════════════
+  //  CHAT VIA GEMMA LOCAL (Edge AI)
+  // ════════════════════════════════════════════════════
+  Future<String> _sendViaGemma(String text, ChatContext ctx) async {
+    try {
+      final gemma = GemmaService();
+      if (!gemma.isInitialized) {
+        await gemma.initAI();
+      }
+      if (!gemma.isInitialized) {
+        return 'IA locale non disponible. Vérifiez que le modèle Gemma '
+            'est dans le dossier Download de votre téléphone.';
+      }
+
+      // Construire un prompt contextuel pour Gemma
+      final systemPrompt = '''
+Tu es l'Assistant AgriScan, un expert agronome IA pour la région ${ctx.region}.
+Culture principale : ${ctx.culture}. Climat : ${ctx.climate}. Sol : ${ctx.soil}.
+Réponds en français, de façon claire et concise (4-6 phrases).
+${ctx.lastScanDisease != null ? 'Dernier diagnostic : ${ctx.lastScanDisease} sur ${ctx.lastScanPlant ?? "culture"}.' : ''}
+''';
+
+      final response = await gemma.sendChatMessage(
+        text,
+        systemPrompt: systemPrompt,
+      );
+      return response;
+    } catch (e) {
+      print("❌ Erreur Gemma Chat : $e");
+      return 'Connexion impossible et IA locale indisponible. '
+          'Réessayez quand vous aurez une connexion internet.';
+    }
   }
 
   // ════════════════════════════════════════════════════
