@@ -141,7 +141,7 @@ class AgriScanMLService {
       final opts = InterpreterOptions()..threads = 2;
       _yoloInterpreter = await Interpreter.fromAsset(
           'assets/models/yolov8n_plants.tflite', options: opts);
-      _yoloAvailable = false; // YOLO désactivé
+      _yoloAvailable = true; // YOLO activé
       // Debug shapes
       final inShape  = _yoloInterpreter!.getInputTensor(0).shape;
       final outShape = _yoloInterpreter!.getOutputTensor(0).shape;
@@ -387,7 +387,18 @@ class AgriScanMLService {
     final y = max(0, (bbox.y - mh).round());
     final w = min(image.width  - x, (bbox.width  + 2 * mw).round());
     final h = min(image.height - y, (bbox.height + 2 * mh).round());
-    if (w <= 0 || h <= 0) return image;
+    // Garde-fou : ignorer les crops absurdes
+    const minSize = 50; // pixels
+    if (w <= minSize || h <= minSize) {
+      print('⚠️ YOLO crop trop petit (${w}x$h) → image entière utilisée');
+      return image;
+    }
+    final ratio = w / h;
+    if (ratio < 0.2 || ratio > 5.0) {
+      print('⚠️ YOLO crop ratio absurde (${ratio.toStringAsFixed(2)}) → image entière utilisée');
+      return image;
+    }
+
     return img.copyCrop(image, x: x, y: y, width: w, height: h);
   }
 

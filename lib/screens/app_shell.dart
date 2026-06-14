@@ -8,6 +8,8 @@ import 'disease_result_screen.dart';
 import 'field_map_screen.dart';
 import 'drone_simulation_screen.dart';
 import 'recommendations_screen.dart';
+import 'video_analysis_screen.dart';
+import 'chat_screen.dart';
 
 class AppShell extends StatefulWidget {
   final int initialIndex;
@@ -40,6 +42,8 @@ class _AppShellState extends State<AppShell>
     _NavDef('🗺️', 'Carte champ',     'Zones infectées',     -2),
     _NavDef('🚁', 'Simulation',      'Traitement drone',    -3),
     _NavDef('💊', 'Recommandations', 'Dosage & traitement', -4),
+    _NavDef('🎥', 'Analyse vidéo',   'Survol drone (vidéo)', -5),
+    _NavDef('💬', 'Assistant IA', 'Questions agronomiques', -6),
   ];
 
   @override
@@ -84,6 +88,8 @@ class _AppShellState extends State<AppShell>
       case -2: target = const FieldMapScreen();         break;
       case -3: target = const DroneSimulationScreen();  break;
       case -4: target = const RecommendationsScreen();  break;
+      case -5: target = const VideoAnalysisScreen();    break;
+      case -6: target = const ChatScreen();             break;
       default: return;
     }
     Navigator.push(context, PageRouteBuilder(

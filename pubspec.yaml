@@ -43,6 +43,11 @@ dependencies:
   supabase_flutter: ^2.3.0  # ← Auth + sync cloud
   tflite_flutter: ^0.12.1
 
+  video_player: ^2.9.2
+  video_thumbnail: ^0.5.3
+
+  file_picker: ^8.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

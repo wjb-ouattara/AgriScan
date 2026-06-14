@@ -15,7 +15,7 @@ class DatabaseService {
 
   static Database? _db;
   static const String _dbName    = 'agriscan.db';
-  static const int    _dbVersion = 1;
+  static const int    _dbVersion = 2;
   static const _uuid  = Uuid();
 
   // ── Accès base de données ─────────────────────────────
@@ -30,7 +30,41 @@ class DatabaseService {
       path,
       version: _dbVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
+  }
+
+  // ── Migration : ajoute les nouvelles tables/colonnes sans
+  //    effacer les données existantes
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+      CREATE TABLE IF NOT EXISTS knowledge_docs (
+        id         TEXT PRIMARY KEY,
+        title      TEXT,
+        content    TEXT,
+        source     TEXT,
+        tags       TEXT,
+        created_at TEXT
+      )
+    ''');
+
+      await db.execute('''
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id         TEXT PRIMARY KEY,
+        role       TEXT,
+        content    TEXT,
+        sources    TEXT,
+        created_at TEXT
+      )
+    ''');
+
+      // SQLite n'autorise pas "ADD COLUMN IF NOT EXISTS" — on tente
+      // et on ignore l'erreur si la colonne existe déjà.
+      try {
+        await db.execute('ALTER TABLE scans ADD COLUMN custom_label TEXT');
+      } catch (_) {}
+    }
   }
 
   // ── Création des tables ───────────────────────────────
@@ -62,7 +96,8 @@ class DatabaseService {
         latitude      REAL,
         longitude     REAL,
         synced        INTEGER DEFAULT 0,
-        created_at    TEXT
+        created_at    TEXT,
+        custom_label  TEXT
       )
     ''');
 
@@ -89,7 +124,29 @@ class DatabaseService {
         {'key': 'is_logged_in', 'value': 'false'});
     await db.insert('app_settings',
         {'key': 'user_id', 'value': ''});
+
+    await db.execute('''
+      CREATE TABLE knowledge_docs (
+        id         TEXT PRIMARY KEY,
+        title      TEXT,
+        content    TEXT,
+        source     TEXT,
+        tags       TEXT,
+        created_at TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE chat_messages (
+        id         TEXT PRIMARY KEY,
+        role       TEXT,
+        content    TEXT,
+        sources    TEXT,
+        created_at TEXT
+      )
+    ''');
   }
+
 
   // ══════════════════════════════════════════════════════
   //  USERS
@@ -273,6 +330,17 @@ class DatabaseService {
         'SELECT COUNT(*) as count FROM scans');
     return Sqflite.firstIntValue(result) ?? 0;
   }
+  Future<void> updateScanLabel(String scanId, String? label) async {
+    final database = await db;
+    await database.update('scans', {'custom_label': label},
+        where: 'id = ?', whereArgs: [scanId]);
+  }
+
+  Future<void> deleteScan(String scanId) async {
+    final database = await db;
+    await database.delete('scans', where: 'id = ?', whereArgs: [scanId]);
+    await database.delete('recommendations', where: 'scan_id = ?', whereArgs: [scanId]);
+  }
 
   // ══════════════════════════════════════════════════════
   //  RECOMMENDATIONS
@@ -358,6 +426,7 @@ class DatabaseService {
   }
 }
 
+
 // ══════════════════════════════════════════════════════════
 //  MODÈLES DE DONNÉES
 // ══════════════════════════════════════════════════════════
@@ -423,6 +492,7 @@ class ScanRecord {
   final String?  imagePath;
   final bool     synced;
   final DateTime createdAt;
+  final String? customLabel;
 
   const ScanRecord({
     required this.id,
@@ -434,6 +504,7 @@ class ScanRecord {
     this.imagePath,
     this.synced    = false,
     required this.createdAt,
+    this.customLabel,
   });
 
   factory ScanRecord.fromMap(Map<String, dynamic> m) => ScanRecord(
@@ -447,5 +518,6 @@ class ScanRecord {
     synced      : (m['synced'] as int? ?? 0) == 1,
     createdAt   : DateTime.parse(
         m['created_at'] ?? DateTime.now().toIso8601String()),
+    customLabel : m['custom_label'] as String?,
   );
 }
