@@ -5,7 +5,7 @@ import '../widgets/common_widgets.dart';
 import '../services/agriscan_ai_service.dart';
 
 // ══════════════════════════════════════════════════════════
-//  RECOMMENDATIONS SCREEN V2 — Powered by Gemini
+//  RECOMMENDATIONS SCREEN V2 — Powered by Agriscan Ai
 //  Les recommandations sont générées dynamiquement par l'IA
 // ══════════════════════════════════════════════════════════
 
@@ -184,7 +184,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
             child: CircularProgressIndicator(
                 color: AppColors.g600, strokeWidth: 3)),
         const SizedBox(height: 20),
-        Text('Gemini analyse la maladie…',
+        Text('Agrisan AI analyse la maladie…',
             style: GoogleFonts.nunito(fontSize: 16,
                 fontWeight: FontWeight.w700, color: AppColors.t1)),
         const SizedBox(height: 8),
