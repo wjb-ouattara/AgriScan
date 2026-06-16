@@ -7,6 +7,7 @@ import '../services/ml_service.dart';
 import 'field_map_screen.dart';
 import 'drone_simulation_screen.dart';
 import 'recommendations_screen.dart';
+import 'marketplace_screen.dart';
 
 // ══════════════════════════════════════════════════════════
 //  DISEASE RESULT SCREEN — Résultats ML réels
@@ -56,7 +57,6 @@ class DiseaseResultScreen extends StatelessWidget {
       // ── Classes Maïs (modèle de votre ami) ──────────
       'f_GLS'   : 'Tache Grise (Gray Leaf Spot)',
       'f_NLB'   : 'Brûlure Nordique (NLB)',
-      'f_RUST'  : 'Rouille du Maïs (Rust)',
       'Healthy' : 'Plante saine',
       'v_MLN'   : 'Nécrose Létale (MLN)',
       'v_MSV'   : 'Striure du Maïs (MSV)',
@@ -451,10 +451,11 @@ class _NavCards extends StatelessWidget {
   const _NavCards({required this.screen, required this.isDesktop});
 
   static const _cards = [
-    ('🗺️', 'Carte du champ',  'Zones infectées', AppColors.g50,     AppColors.g300),
-    ('🚁', 'Simulation drone', 'Traitement ciblé', Color(0xFFF0F9F1), Color(0xFFA8D5AC)),
-    ('💊', 'Recommandations',  'Produit + dosage', Color(0xFFFAEEDA), Color(0xFFFAC775)),
-    ('📊', 'Historique',       'Sauvegarder',      AppColors.surface2, AppColors.border),
+    ('🗺️', 'Carte du champ',  'Zones infectées',          AppColors.g50,          AppColors.g300),
+    ('🚁', 'Simulation drone', 'Traitement ciblé',         Color(0xFFF0F9F1),      Color(0xFFA8D5AC)),
+    ('💊', 'Recommandations',  'Produit + dosage',         Color(0xFFFAEEDA),      Color(0xFFFAC775)),
+    ('🛒', 'Boutique',         'Acheter les traitements',  Color(0xFFFEF0D6),      Color(0xFFE8920A)),
+    ('📊', 'Historique',       'Sauvegarder',              AppColors.surface2,     AppColors.border),
   ];
 
   @override
@@ -481,6 +482,9 @@ class _NavCards extends StatelessWidget {
         Expanded(child: _NavTile(c: _cards[3], isDesktop: false,
             onTap: () => _navigate(context, _cards[3].$1, screen))),
       ]),
+      const SizedBox(height: 10),
+      _NavTile(c: _cards[4], isDesktop: false,
+          onTap: () => _navigate(context, _cards[4].$1, screen)),
     ]);
   }
 
@@ -495,6 +499,9 @@ class _NavCards extends StatelessWidget {
           plantName    : screen._plantName,
           severityLevel: screen._severity,
           confidence   : screen._confidence); break;
+      case '🛒': target = MarketplaceScreen(
+          diseaseCode  : screen.result?.diseaseName,
+          diseaseName  : screen._diseaseName); break;
       default: return;
     }
     Navigator.push(context,
