@@ -31,7 +31,29 @@ class DatabaseService {
       version: _dbVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
+      onOpen: _onOpen,
     );
+  }
+
+  // ── Appelé à chaque ouverture de la base (après onCreate/onUpgrade)
+  // Garantit que les tables marketplace existent même si la migration
+  // n'a pas tourné (base déjà installée avant l'ajout du marketplace).
+  Future<void> _onOpen(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS orders (
+        id               TEXT PRIMARY KEY,
+        user_id          TEXT,
+        lines            TEXT,
+        total            REAL,
+        status           TEXT DEFAULT 'pending',
+        delivery_name    TEXT,
+        delivery_phone   TEXT,
+        delivery_address TEXT,
+        delivery_city    TEXT,
+        created_at       TEXT,
+        synced           INTEGER DEFAULT 0
+      )
+    ''');
   }
 
   // ── Migration : ajoute les nouvelles tables/colonnes sans
@@ -101,6 +123,24 @@ class DatabaseService {
             where: 'conversation_id IS NULL OR conversation_id = ?',
             whereArgs: ['']);
       }
+      if (oldVersion < 4) {
+        // ── Marketplace : table des commandes locales ──────
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS orders (
+          id               TEXT PRIMARY KEY,
+          user_id          TEXT,
+          lines            TEXT,
+          total            REAL,
+          status           TEXT DEFAULT 'pending',
+          delivery_name    TEXT,
+          delivery_phone   TEXT,
+          delivery_address TEXT,
+          delivery_city    TEXT,
+          created_at       TEXT,
+          synced           INTEGER DEFAULT 0
+        )
+      ''');
+      }
     }
 
     if (oldVersion < 4) {
@@ -135,8 +175,6 @@ class DatabaseService {
       } catch (_) {}
     }
   }
-
-  // ── Création des tables ───────────────────────────────
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE users (
@@ -245,6 +283,23 @@ class DatabaseService {
         value      TEXT,
         date       TEXT,
         metadata   TEXT
+      )
+    ''');
+
+    // ── Marketplace ────────────────────────────────────
+    await db.execute('''
+      CREATE TABLE orders (
+        id               TEXT PRIMARY KEY,
+        user_id          TEXT,
+        lines            TEXT,
+        total            REAL,
+        status           TEXT DEFAULT 'pending',
+        delivery_name    TEXT,
+        delivery_phone   TEXT,
+        delivery_address TEXT,
+        delivery_city    TEXT,
+        created_at       TEXT,
+        synced           INTEGER DEFAULT 0
       )
     ''');
   }
@@ -557,6 +612,28 @@ class DatabaseService {
     await setSetting('scans_used', '0');
     await setSetting('is_logged_in', 'false');
     await setSetting('user_id', '');
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  MARKETPLACE — Commandes
+  // ══════════════════════════════════════════════════════
+
+  Future<void> saveOrder(Map<String, dynamic> orderMap) async {
+    final database = await db;
+    await database.insert('orders', orderMap);
+  }
+
+  Future<void> markOrderSynced(String orderId) async {
+    final database = await db;
+    await database.update('orders', {'synced': 1},
+        where: 'id = ?', whereArgs: [orderId]);
+  }
+
+  Future<List<Map<String, dynamic>>> getOrders(String userId) async {
+    final database = await db;
+    return await database.query('orders',
+        where: 'user_id = ?', whereArgs: [userId],
+        orderBy: 'created_at DESC');
   }
 }
 
