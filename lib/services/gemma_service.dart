@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Service singleton pour Gemma 4 LiteRT-LM.
 /// 
@@ -32,20 +34,29 @@ class GemmaService {
         }
       }
 
-      print("--- ÉTAPE 1 : Pointage vers le dossier Download public ---");
-      const modelPath = '/storage/emulated/0/Download/gemma-4-E2B-it.litertlm';
+      print("--- ÉTAPE 1 : Préparation du modèle ---");
+      final publicPath = '/storage/emulated/0/Download/gemma-4-E2B-it.litertlm';
+      final appDocsDir = await getApplicationDocumentsDirectory();
+      final internalPath = '${appDocsDir.path}/gemma-4-E2B-it.litertlm';
 
-      final file = File(modelPath);
-      if (!await file.exists()) {
-        print("❌ Fichier introuvable : $modelPath");
-        return;
+      if (!File(internalPath).existsSync()) {
+        print("⏳ Copie du modèle vers le stockage interne (cela peut prendre 10 à 30 secondes)...");
+        final publicFile = File(publicPath);
+        if (!publicFile.existsSync()) {
+          print("❌ Fichier introuvable dans Download : $publicPath");
+          return;
+        }
+        await publicFile.copy(internalPath);
+        print("✅ Copie terminée !");
+      } else {
+        print("ℹ️ Le modèle est déjà dans le stockage interne.");
       }
 
       print("--- ÉTAPE 2 : Chargement de Gemma ---");
       await FlutterGemma.installModel(
         modelType: ModelType.gemma4,
         fileType: ModelFileType.litertlm,
-      ).fromFile(modelPath).install();
+      ).fromFile(internalPath).install();
 
       print("--- ÉTAPE 3 : Allocation GPU ---");
       _model = await FlutterGemma.getActiveModel(
@@ -53,8 +64,27 @@ class GemmaService {
         preferredBackend: PreferredBackend.gpu,
       );
 
+      print("--- ÉTAPE 4 : Initialisation Vector Store (Gecko) ---");
+      final hasGecko = await FlutterGemma.isModelInstalled('Gecko_256_quant.tflite');
+      if (!hasGecko) {
+        print("⏳ Téléchargement du modèle Gecko (requis 1ère fois uniquement)...");
+        await FlutterGemma.installEmbedder()
+            .modelFromNetwork('https://huggingface.co/litert-community/Gecko-110m-en/resolve/main/Gecko_256_quant.tflite')
+            .tokenizerFromNetwork('https://huggingface.co/litert-community/Gecko-110m-en/resolve/main/sentencepiece.model')
+            .install();
+        print("✅ Gecko téléchargé avec succès !");
+      } else {
+        print("ℹ️ Modèle Gecko déjà présent, chargement hors-ligne.");
+        final appDocsDir = await getApplicationDocumentsDirectory();
+        await FlutterGemma.installEmbedder()
+            .modelFromFile('${appDocsDir.path}/Gecko_256_quant.tflite')
+            .tokenizerFromFile('${appDocsDir.path}/sentencepiece.model')
+            .install();
+      }
+      await FlutterGemmaPlugin.instance.initializeVectorStore('rag_store');
+
       isInitialized = true;
-      print("🚀 IA Gemma chargée avec succès (GPU) !");
+      print("🚀 IA Gemma et Vector Store chargés avec succès !");
 
     } catch (e) {
       print("❌ Erreur de chargement Gemma : $e");
@@ -71,12 +101,13 @@ class GemmaService {
 
     try {
       // Créer une session isolée pour chaque requête
-      final session = await _model!.createChat(
+      final session = await _model!.openChat(
         systemInstruction: "Tu es un expert agronome. Réponds UNIQUEMENT en JSON valide, sans markdown.",
       );
 
       await session.addQueryChunk(Message.text(text: prompt, isUser: true));
       final response = await session.generateChatResponse();
+      await session.session.close();
 
       if (response is TextResponse) {
         return response.token.isNotEmpty ? response.token : "Pas de réponse.";
@@ -95,7 +126,7 @@ class GemmaService {
   /// Crée ou récupère une session de chat persistante
   Future<void> _ensureChatSession(String systemPrompt) async {
     if (_persistentChatSession == null) {
-      _persistentChatSession = await _model!.createChat(
+      _persistentChatSession = await _model!.openChat(
         systemInstruction: systemPrompt,
       );
     }
@@ -127,6 +158,7 @@ class GemmaService {
 
   /// Réinitialise la session de chat (nouvelle conversation)
   void resetChatSession() {
+    _persistentChatSession?.session.close();
     _persistentChatSession = null;
   }
 

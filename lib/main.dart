@@ -6,6 +6,7 @@ import 'screens/app_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/database_service.dart';
 import 'services/supabase_service.dart';
+import 'services/dataset_service.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 
 void main() async {
@@ -39,6 +40,14 @@ void main() async {
 
   // Vérifier si déjà connecté
   final isLoggedIn = await DatabaseService().isLoggedIn();
+
+  // ☁️ Lancement en arrière-plan du sync de Dataset (sans bloquer l'UI)
+  if (isLoggedIn) {
+    DatasetService().uploadBatches().catchError((e) {
+      print("⚠️ Erreur background upload dataset: $e");
+      return false; // Type matching
+    });
+  }
 
   runApp(AgriScanApp(isLoggedIn: isLoggedIn));
 }

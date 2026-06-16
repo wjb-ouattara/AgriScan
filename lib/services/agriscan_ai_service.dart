@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import '../config/secrets.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'gemma_service.dart'; // N'oublie pas d'importer ton IA locale !
+import 'knowledge_base_service.dart';
+import 'memory_service.dart';
 
 // ══════════════════════════════════════════════════════════
 //  AGRISCAN AI SERVICE
@@ -23,6 +25,10 @@ class AgriScanAIService {
   // Cache en mémoire — évite les appels redondants
   final Map<String, AIRecommendation> _cache = {};
 
+  Future<void> initServices() async {
+    await KnowledgeBaseService().seedIfEmpty();
+  }
+
   // ══════════════════════════════════════════════════════
   //  ANALYSE PRINCIPALE (HYBRIDE : GROQ + GEMMA LOCAL)
   // ══════════════════════════════════════════════════════
@@ -37,22 +43,26 @@ class AgriScanAIService {
     final key = '$diseaseName-$plantName-$severityLevel';
     if (_cache.containsKey(key)) return _cache[key]!;
 
-    final prompt = _buildPrompt(
-      disease   : diseaseName,
-      plant     : plantName,
-      severity  : severityLevel,
-      confidence: confidence,
-      region    : region,
-    );
+    await initServices();
 
     // 1. Vérification de la connexion
     final connectivityResult = await Connectivity().checkConnectivity();
     final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
         connectivityResult.contains(ConnectivityResult.wifi);
 
+    AIRecommendation result;
+
     if (isOnline) {
       // ☁️ MODE CLOUD : API GROQ
       print("📶 Réseau détecté : Analyse via Groq (Cloud)");
+      final prompt = await _buildPrompt(
+        disease   : diseaseName,
+        plant     : plantName,
+        severity  : severityLevel,
+        confidence: confidence,
+        region    : region,
+      );
+
       try {
         final response = await http.post(
           Uri.parse(_url),
@@ -75,22 +85,34 @@ class AgriScanAIService {
           final data    = jsonDecode(response.body);
           final rawText = data['choices'][0]['message']['content'] as String;
           final parsed  = jsonDecode(rawText) as Map<String, dynamic>;
-          final reco    = AIRecommendation.fromJson(parsed);
-          _cache[key]   = reco;
-          return reco;
+          result = AIRecommendation.fromJson(parsed);
         } else {
           throw AIServiceException('Erreur Groq ${response.statusCode}');
         }
       } catch (e) {
         print("⚠️ Échec du Cloud ($e). Bascule vers le mode local de secours...");
-        return await _runLocalAnalysis(prompt, diseaseName, plantName, key);
+        result = await _runLocalAnalysis(diseaseName, plantName, key);
       }
 
     } else {
       // 📱 MODE HORS-LIGNE : GEMMA (Local GPU)
       print("📴 Pas de réseau : Analyse Edge AI via Gemma sur le GPU");
-      return await _runLocalAnalysis(prompt, diseaseName, plantName, key);
+      result = await _runLocalAnalysis(diseaseName, plantName, key);
     }
+
+    _cache[key] = result;
+
+    // 🧠 Enregistrer dans la mémoire utilisateur
+    if (diseaseName.toLowerCase() != "sain") {
+      await MemoryService().recordScan(
+        plant: plantName,
+        disease: diseaseName,
+        confidence: confidence,
+        severity: severityLevel,
+      );
+    }
+
+    return result;
   }
 
   // ══════════════════════════════════════════════════════
@@ -99,7 +121,6 @@ class AgriScanAIService {
   // ══════════════════════════════════════════════════════
 
   Future<AIRecommendation> _runLocalAnalysis(
-      String fullPrompt,
       String disease,
       String plant,
       String cacheKey
@@ -110,8 +131,8 @@ class AgriScanAIService {
         await gemmaService.initAI();
       }
 
-      // Prompt ALLÉGÉ pour Gemma (moins de champs = plus rapide)
-      final lightPrompt = _buildLightPrompt(
+      // Prompt ALLÉGÉ pour Gemma (moins de champs = plus rapide) + RAG
+      final lightPrompt = await _buildLightPrompt(
         disease: disease,
         plant: plant,
       );
@@ -124,7 +145,6 @@ class AgriScanAIService {
       final parsed = jsonDecode(rawText) as Map<String, dynamic>;
       final reco   = AIRecommendation.fromJson(parsed);
 
-      _cache[cacheKey] = reco;
       return reco;
 
     } catch (e) {
@@ -137,13 +157,20 @@ class AgriScanAIService {
   //  PROMPT AGRONOMIQUE COMPLET (GROQ CLOUD)
   // ══════════════════════════════════════════════════════
 
-  String _buildPrompt({
+  Future<String> _buildPrompt({
     required String disease,
     required String plant,
     required String severity,
     required double confidence,
     required String region,
-  }) {
+  }) async {
+    // 📚 Récupération du contexte RAG (Top 3 docs)
+    final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 3);
+    final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n\n');
+    
+    // 🧠 Récupération de la mémoire
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
     return '''
 Tu es un expert agronome spécialisé dans les maladies des cultures au $region.
 Un système d'IA a détecté la maladie suivante :
@@ -153,6 +180,12 @@ Un système d'IA a détecté la maladie suivante :
 - Sévérité  : $severity
 - Confiance : ${(confidence * 100).round()}%
 - Région    : $region
+
+📚 BASE DE CONNAISSANCES (RAG)
+Utilise ces informations pour formuler tes conseils de traitement :
+$ragContext
+
+$memoryContext
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après,
 sans balises markdown, exactement dans ce format :
@@ -212,12 +245,25 @@ sans balises markdown, exactement dans ce format :
   //  → Moins de champs = réponse ~3x plus rapide
   // ══════════════════════════════════════════════════════
 
-  String _buildLightPrompt({
+  Future<String> _buildLightPrompt({
     required String disease,
     required String plant,
-  }) {
+  }) async {
+    // 📚 Récupération du contexte RAG (Top 2 docs en mode local pour gagner de la place)
+    final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 2);
+    final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n');
+    
+    // 🧠 Récupération de la mémoire
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
     return '''
-Maladie "$disease" détectée sur $plant. Réponds UNIQUEMENT en JSON valide :
+Maladie "$disease" détectée sur $plant.
+Docs RAG:
+$ragContext
+Mémoire:
+$memoryContext
+
+Réponds UNIQUEMENT en JSON valide :
 {
   "disease_name_fr": "nom français",
   "disease_name_scientific": "nom latin",

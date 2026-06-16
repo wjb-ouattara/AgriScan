@@ -1,8 +1,10 @@
-import 'dart:math';
+import 'dart:convert';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import 'database_service.dart';
 import '../data/knowledge_seed.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
 
 // ══════════════════════════════════════════════════════════
 //  KNOWLEDGE BASE SERVICE — RAG léger (100% hors ligne)
@@ -59,16 +61,6 @@ class KnowledgeBaseService {
   final _db = DatabaseService();
   static const _uuid = Uuid();
 
-  // Mots vides français ignorés lors de l'indexation/recherche
-  static const _stopwords = {
-    'les','des','est','que','qui','pour','avec','dans','une','sur','mon',
-    'mes','vos','votre','sont','quoi','comment','quand','quel','quelle',
-    'plus','tout','tous','ses','par','aux','cette','ces','son',
-    'leur','leurs','nos','notre','sera','peut','peux','faire',
-    'avoir','être','etre','tres','très','aussi','donc','mais','ou','et',
-    'au','de','du','la','le','un','en','ne','pas','vous','je',
-  };
-
   // ════════════════════════════════════════════════════
   //  SEED — initialisation de la base au premier lancement
   // ════════════════════════════════════════════════════
@@ -79,15 +71,92 @@ class KnowledgeBaseService {
     if (count > 0) return;
 
     final now = DateTime.now().toIso8601String();
+    
+    // 1. Importation du seed en dur (kKnowledgeSeed)
     for (final doc in kKnowledgeSeed) {
+      final id = _uuid.v4();
       await database.insert('knowledge_docs', {
-        'id'        : _uuid.v4(),
+        'id'        : id,
         'title'     : doc.title,
         'content'   : doc.content,
         'source'    : 'seed',
         'tags'      : doc.tags.join(','),
         'created_at': now,
       });
+
+      // Ajout dans le Vector Store
+      try {
+        await FlutterGemmaPlugin.instance.addDocument(
+          id: id,
+          content: '${doc.title}\n${doc.content}',
+          metadata: doc.title,
+        );
+      } catch (e) {
+        print("Erreur ajout VectorStore: $e");
+      }
+    }
+
+    // 2. Importation dynamique des fichiers JSON dans assets/documents/
+    try {
+      print("--- Recherche de fichiers JSON dans les assets ---");
+      final manifestContent = await rootBundle.loadString('AssetManifest.json');
+      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
+      final jsonPaths = manifestMap.keys
+          .where((String key) => key.startsWith('assets/documents/') && key.endsWith('.json'))
+          .toList();
+
+      for (final path in jsonPaths) {
+        print("➡️ Importation automatique de : $path");
+        try {
+          String jsonString = await rootBundle.loadString(path);
+          if (jsonString.startsWith('\ufeff')) {
+            jsonString = jsonString.substring(1);
+          }
+          final dynamic decoded = json.decode(jsonString);
+          final List<dynamic> jsonData = decoded is List ? decoded : [decoded];
+
+        int countItems = 0;
+        for (final item in jsonData) {
+          final id = item['id'] ?? _uuid.v4();
+          final title = item['title'] ?? 'Document importé';
+          final content = item['full_content'] ?? item['content'] ?? '';
+          final source = item['source_file'] ?? path;
+          final category = item['category'] ?? '';
+
+          if (content.isEmpty) continue;
+
+          await database.insert('knowledge_docs', {
+            'id'        : id,
+            'title'     : title,
+            'content'   : content,
+            'source'    : source,
+            'tags'      : category,
+            'created_at': now,
+          });
+
+          // Vectorisation avec Gecko
+          try {
+            await FlutterGemmaPlugin.instance.addDocument(
+              id: id,
+              content: '$title\n$content',
+              metadata: title,
+            );
+          } catch (e) {
+            print("Erreur VectorStore JSON ($id): $e");
+          }
+          
+          countItems++;
+          if (countItems % 50 == 0) {
+            print("... $countItems documents vectorisés depuis $path ...");
+          }
+        }
+        print("✅ Terminé : $countItems documents importés depuis $path !");
+        } catch (e) {
+          print("⚠️ Erreur fichier $path: $e");
+        }
+      }
+    } catch (e) {
+      print("⚠️ Erreur lors du chargement des JSON depuis les assets: $e");
     }
   }
 
@@ -126,14 +195,28 @@ class KnowledgeBaseService {
     final chunks = _chunkText(content, maxWords: maxWords);
 
     for (var i = 0; i < chunks.length; i++) {
+      final id = _uuid.v4();
+      final chunkTitle = chunks.length > 1 ? '$title (${i + 1}/${chunks.length})' : title;
+      
       await database.insert('knowledge_docs', {
-        'id'        : _uuid.v4(),
-        'title'     : chunks.length > 1 ? '$title (${i + 1}/${chunks.length})' : title,
+        'id'        : id,
+        'title'     : chunkTitle,
         'content'   : chunks[i],
         'source'    : source,
         'tags'      : '',
         'created_at': now,
       });
+
+      // Ajout dans le Vector Store
+      try {
+        await FlutterGemmaPlugin.instance.addDocument(
+          id: id,
+          content: '$chunkTitle\n${chunks[i]}',
+          metadata: title,
+        );
+      } catch (e) {
+        print("Erreur ajout VectorStore: $e");
+      }
     }
     return chunks.length;
   }
@@ -169,63 +252,26 @@ class KnowledgeBaseService {
   }
 
   // ════════════════════════════════════════════════════
-  //  RECHERCHE — TF-IDF léger, sans embeddings
+  //  RECHERCHE — Vector Store (Gecko)
   // ════════════════════════════════════════════════════
   Future<List<KnowledgeDocument>> search(String query, {int topK = 3}) async {
-    final docs = await getAllDocuments();
-    if (docs.isEmpty) return [];
+    try {
+      final results = await FlutterGemmaPlugin.instance.searchSimilar(
+        query: query,
+        topK: topK,
+      );
 
-    final queryTerms = _tokenize(query).toSet();
-    if (queryTerms.isEmpty) return [];
-
-    // Document frequency (df) de chaque terme à travers la base
-    final df = <String, int>{};
-    final docTermFreqs = <String, Map<String, int>>{};
-
-    for (final doc in docs) {
-      final terms = _tokenize('${doc.title} ${doc.content} ${doc.tags.join(' ')}');
-      final tf = <String, int>{};
-      for (final t in terms) tf[t] = (tf[t] ?? 0) + 1;
-      docTermFreqs[doc.id] = tf;
-      for (final t in tf.keys) df[t] = (df[t] ?? 0) + 1;
+      return results.map((r) => KnowledgeDocument(
+        id: r.id,
+        title: r.metadata ?? 'Source experte',
+        content: r.content,
+        source: 'vector_store',
+        tags: [],
+        createdAt: DateTime.now(),
+      )).toList();
+    } catch (e) {
+      print("Erreur Vector Store search: $e");
+      return [];
     }
-
-    final n = docs.length;
-    final scored = <MapEntry<KnowledgeDocument, double>>[];
-
-    for (final doc in docs) {
-      final tf = docTermFreqs[doc.id]!;
-      double score = 0;
-      for (final qt in queryTerms) {
-        final f = tf[qt] ?? 0;
-        if (f == 0) continue;
-        final idf = log((n + 1) / (1 + (df[qt] ?? 0))) + 1;
-        score += f * idf;
-      }
-      if (score > 0) scored.add(MapEntry(doc, score));
-    }
-
-    scored.sort((a, b) => b.value.compareTo(a.value));
-    return scored.take(topK).map((e) => e.key).toList();
-  }
-
-  // ── Tokenisation : minuscules, sans accents, sans ponctuation,
-  //    sans mots vides, mots de 3+ caractères ──────────────────
-  List<String> _tokenize(String text) {
-    final normalized = _removeAccents(text.toLowerCase());
-    final cleaned = normalized.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
-    return cleaned
-        .split(RegExp(r'\s+'))
-        .where((w) => w.length > 2 && !_stopwords.contains(w))
-        .toList();
-  }
-
-  String _removeAccents(String s) {
-    const from = 'àâäáãåèéêëìíîïòóôõöùúûüçñ';
-    const to   = 'aaaaaaeeeeiiiiooooouuuucn';
-    for (var i = 0; i < from.length; i++) {
-      s = s.replaceAll(from[i], to[i]);
-    }
-    return s;
   }
 }
