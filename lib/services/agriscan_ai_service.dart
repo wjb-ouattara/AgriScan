@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/secrets.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'gemma_service.dart'; // N'oublie pas d'importer ton IA locale !
+import 'knowledge_base_service.dart';
+import 'memory_service.dart';
 
 // ══════════════════════════════════════════════════════════
 //  AGRISCAN AI SERVICE
@@ -21,8 +25,12 @@ class AgriScanAIService {
   // Cache en mémoire — évite les appels redondants
   final Map<String, AIRecommendation> _cache = {};
 
+  Future<void> initServices() async {
+    await KnowledgeBaseService().seedIfEmpty();
+  }
+
   // ══════════════════════════════════════════════════════
-  //  ANALYSE PRINCIPALE
+  //  ANALYSE PRINCIPALE (HYBRIDE : GROQ + GEMMA LOCAL)
   // ══════════════════════════════════════════════════════
 
   Future<AIRecommendation> analyzeDisease({
@@ -35,61 +43,134 @@ class AgriScanAIService {
     final key = '$diseaseName-$plantName-$severityLevel';
     if (_cache.containsKey(key)) return _cache[key]!;
 
-    final prompt = _buildPrompt(
-      disease   : diseaseName,
-      plant     : plantName,
-      severity  : severityLevel,
-      confidence: confidence,
-      region    : region,
-    );
+    await initServices();
 
-    try {
-      final response = await http.post(
-        Uri.parse(_url),
-        headers: {
-          'Content-Type' : 'application/json',
-          'Authorization': 'Bearer $_key',
-        },
-        body: jsonEncode({
-          'model'          : _model,
-          'messages'       : [
-            {'role': 'user', 'content': prompt}
-          ],
-          'temperature'    : 0.3,
-          'max_tokens'     : 2048,
-          'response_format': {'type': 'json_object'},
-        }),
-      ).timeout(const Duration(seconds: 30));
+    // 1. Vérification de la connexion
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
+        connectivityResult.contains(ConnectivityResult.wifi);
 
-      if (response.statusCode == 200) {
-        final data    = jsonDecode(response.body);
-        final rawText = data['choices'][0]['message']['content'] as String;
-        final parsed  = jsonDecode(rawText) as Map<String, dynamic>;
-        final reco    = AIRecommendation.fromJson(parsed);
-        _cache[key]   = reco;
-        return reco;
-      } else {
-        throw AIServiceException(
-            'Erreur ${response.statusCode}: ${response.body}');
+    AIRecommendation result;
+
+    if (isOnline) {
+      // ☁️ MODE CLOUD : API GROQ
+      print("📶 Réseau détecté : Analyse via Groq (Cloud)");
+      final prompt = await _buildPrompt(
+        disease   : diseaseName,
+        plant     : plantName,
+        severity  : severityLevel,
+        confidence: confidence,
+        region    : region,
+      );
+
+      try {
+        final response = await http.post(
+          Uri.parse(_url),
+          headers: {
+            'Content-Type' : 'application/json',
+            'Authorization': 'Bearer $_key',
+          },
+          body: jsonEncode({
+            'model'          : _model,
+            'messages'       : [
+              {'role': 'user', 'content': prompt}
+            ],
+            'temperature'    : 0.3,
+            'max_tokens'     : 2048,
+            'response_format': {'type': 'json_object'},
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (response.statusCode == 200) {
+          final data    = jsonDecode(response.body);
+          final rawText = data['choices'][0]['message']['content'] as String;
+          final parsed  = jsonDecode(rawText) as Map<String, dynamic>;
+          result = AIRecommendation.fromJson(parsed);
+        } else {
+          throw AIServiceException('Erreur Groq ${response.statusCode}');
+        }
+      } catch (e) {
+        print("⚠️ Échec du Cloud ($e). Bascule vers le mode local de secours...");
+        result = await _runLocalAnalysis(diseaseName, plantName, key);
       }
-    } on AIServiceException {
-      rethrow;
+
+    } else {
+      // 📱 MODE HORS-LIGNE : GEMMA (Local GPU)
+      print("📴 Pas de réseau : Analyse Edge AI via Gemma sur le GPU");
+      result = await _runLocalAnalysis(diseaseName, plantName, key);
+    }
+
+    _cache[key] = result;
+
+    // 🧠 Enregistrer dans la mémoire utilisateur
+    if (diseaseName.toLowerCase() != "sain") {
+      await MemoryService().recordScan(
+        plant: plantName,
+        disease: diseaseName,
+        confidence: confidence,
+        severity: severityLevel,
+      );
+    }
+
+    return result;
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  MÉTHODE INTERNE : EXÉCUTION LOCALE (GEMMA)
+  //  Prompt allégé pour réponse rapide (~15-20s vs ~53s)
+  // ══════════════════════════════════════════════════════
+
+  Future<AIRecommendation> _runLocalAnalysis(
+      String disease,
+      String plant,
+      String cacheKey
+      ) async {
+    try {
+      final gemmaService = GemmaService();
+      if (!gemmaService.isInitialized) {
+        await gemmaService.initAI();
+      }
+
+      // Prompt ALLÉGÉ pour Gemma (moins de champs = plus rapide) + RAG
+      final lightPrompt = await _buildLightPrompt(
+        disease: disease,
+        plant: plant,
+      );
+
+      String rawText = await gemmaService.sendMessage(lightPrompt);
+
+      // 🧹 NETTOYAGE DU JSON
+      rawText = rawText.replaceAll('```json', '').replaceAll('```', '').trim();
+
+      final parsed = jsonDecode(rawText) as Map<String, dynamic>;
+      final reco   = AIRecommendation.fromJson(parsed);
+
+      return reco;
+
     } catch (e) {
-      throw AIServiceException('Erreur réseau : $e');
+      print("❌ Erreur Gemma ou JSON invalide : $e");
+      return AIRecommendation.offline(disease, plant);
     }
   }
 
   // ══════════════════════════════════════════════════════
-  //  PROMPT AGRONOMIQUE
+  //  PROMPT AGRONOMIQUE COMPLET (GROQ CLOUD)
   // ══════════════════════════════════════════════════════
 
-  String _buildPrompt({
+  Future<String> _buildPrompt({
     required String disease,
     required String plant,
     required String severity,
     required double confidence,
     required String region,
-  }) {
+  }) async {
+    // 📚 Récupération du contexte RAG (Top 3 docs)
+    final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 3);
+    final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n\n');
+    
+    // 🧠 Récupération de la mémoire
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
     return '''
 Tu es un expert agronome spécialisé dans les maladies des cultures au $region.
 Un système d'IA a détecté la maladie suivante :
@@ -99,6 +180,12 @@ Un système d'IA a détecté la maladie suivante :
 - Sévérité  : $severity
 - Confiance : ${(confidence * 100).round()}%
 - Région    : $region
+
+📚 BASE DE CONNAISSANCES (RAG)
+Utilise ces informations pour formuler tes conseils de traitement :
+$ragContext
+
+$memoryContext
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après,
 sans balises markdown, exactement dans ce format :
@@ -148,6 +235,49 @@ sans balises markdown, exactement dans ce format :
   },
   "weather_conditions": "Conditions météo favorisant cette maladie",
   "affected_parts": ["Feuilles", "Tiges"],
+  "severity_score": 65
+}
+''';
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  PROMPT ALLÉGÉ POUR GEMMA (LOCAL / EDGE AI)
+  //  → Moins de champs = réponse ~3x plus rapide
+  // ══════════════════════════════════════════════════════
+
+  Future<String> _buildLightPrompt({
+    required String disease,
+    required String plant,
+  }) async {
+    // 📚 Récupération du contexte RAG (Top 2 docs en mode local pour gagner de la place)
+    final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 2);
+    final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n');
+    
+    // 🧠 Récupération de la mémoire
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
+    return '''
+Maladie "$disease" détectée sur $plant.
+Docs RAG:
+$ragContext
+Mémoire:
+$memoryContext
+
+Réponds UNIQUEMENT en JSON valide :
+{
+  "disease_name_fr": "nom français",
+  "disease_name_scientific": "nom latin",
+  "description": "2 phrases max",
+  "severity_explanation": "1 phrase",
+  "urgency": "immediate",
+  "urgency_label": "Dans les 48h",
+  "treatment_steps": [{"step":1,"title":"action","description":"détail","timing":"quand"}],
+  "products": [{"name":"produit","type":"fongicide","active_ingredient":"matière","dose_per_ha":"dose","water_volume":"volume","frequency":"freq","pre_harvest_delay":"délai","availability_morocco":true,"estimated_cost_dh":"coût"}],
+  "application_schedule": [{"day":"J0","action":"action"}],
+  "prevention_tips": ["conseil1","conseil2"],
+  "economic_impact": {"yield_loss_without_treatment":"perte","treatment_cost":"coût","roi":"roi"},
+  "weather_conditions": "conditions",
+  "affected_parts": ["Feuilles"],
   "severity_score": 65
 }
 ''';

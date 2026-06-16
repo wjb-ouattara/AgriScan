@@ -5,7 +5,7 @@ import '../widgets/common_widgets.dart';
 import '../services/agriscan_ai_service.dart';
 
 // ══════════════════════════════════════════════════════════
-//  RECOMMENDATIONS SCREEN V2 — Powered by Gemini
+//  RECOMMENDATIONS SCREEN V2 — Powered by Agriscan Ai
 //  Les recommandations sont générées dynamiquement par l'IA
 // ══════════════════════════════════════════════════════════
 
@@ -184,7 +184,7 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
             child: CircularProgressIndicator(
                 color: AppColors.g600, strokeWidth: 3)),
         const SizedBox(height: 20),
-        Text('Gemini analyse la maladie…',
+        Text('Agrisan AI analyse la maladie…',
             style: GoogleFonts.nunito(fontSize: 16,
                 fontWeight: FontWeight.w700, color: AppColors.t1)),
         const SizedBox(height: 8),
@@ -299,15 +299,19 @@ class _RecommendationsScreenState extends State<RecommendationsScreen> {
                       const SizedBox(width: 12),
                       Expanded(child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Row(children: [
-                          Expanded(child: Text(s.title, style: GoogleFonts.nunito(
-                              fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.t1))),
-                          Text(s.timing, style: GoogleFonts.nunito(
-                              fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.t3)),
-                        ]),
+                        Text(s.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.nunito(
+                                fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.t1)),
+                        const SizedBox(height: 2),
+                        Text(s.timing,
+                            style: GoogleFonts.nunito(
+                                fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.t3)),
                         const SizedBox(height: 3),
-                        Text(s.description, style: GoogleFonts.nunitoSans(
-                            fontSize: 13, color: AppColors.t2, height: 1.4)),
+                        Text(s.description,
+                            style: GoogleFonts.nunitoSans(
+                                fontSize: 13, color: AppColors.t2, height: 1.4)),
                       ])),
                     ]));
           }).toList())),

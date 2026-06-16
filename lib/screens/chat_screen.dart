@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import '../theme/app_theme.dart';
 import '../services/database_service.dart';
 import '../services/chat_service.dart';
@@ -43,6 +46,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _speechAvailable = false;
   bool _listening = false;
+  String? _pendingImagePath;  // Image en attente d'envoi
 
   String _userName = 'Agriculteur';
   String _region   = 'Maroc';
@@ -249,28 +253,39 @@ class _ChatScreenState extends State<ChatScreen> {
     await _loadConversations();
   }
 
-  // ── Envoi ──────────────────────────────────────────────
+  // ── Envoi ──────────────────────────────────────────────────────
   Future<void> _send([String? quick]) async {
     final text = (quick ?? _controller.text).trim();
-    if (text.isEmpty || _sending) return;
+    if ((text.isEmpty && _pendingImagePath == null) || _sending) return;
     if (_listening) await _toggleListening();
 
     final convId = _conversationId ?? await _chat.createConversation();
-
     final history = List<ChatMessage>.from(_messages);
+    final imagePath = _pendingImagePath;
+
     final userMsg = ChatMessage(
-        id: _uuid.v4(), role: 'user', content: text, createdAt: DateTime.now());
+        id: _uuid.v4(), role: 'user', content: text,
+        imagePath: imagePath, createdAt: DateTime.now());
 
     setState(() {
       _conversationId = convId;
       _messages.add(userMsg);
       _sending = true;
+      _pendingImagePath = null;
     });
     _controller.clear();
     _scrollToBottom();
 
-    final reply = await _chat.sendMessage(
-        conversationId: convId, text: text, history: history, context: _buildContext());
+    ChatMessage reply;
+    if (imagePath != null) {
+      reply = await _chat.sendMessageWithImage(
+          conversationId: convId, text: text, imagePath: imagePath,
+          history: history, context: _buildContext());
+    } else {
+      reply = await _chat.sendMessage(
+          conversationId: convId, text: text,
+          history: history, context: _buildContext());
+    }
 
     if (mounted) setState(() {
       _messages.add(reply);
@@ -278,6 +293,49 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
     await _loadConversations();
+  }
+
+  // ── Picker d'image (caméra ou galerie) ──────────────────
+  Future<void> _pickImage(ImageSource source) async {
+    if (_sending) return;
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+        source: source, maxWidth: 1024, maxHeight: 1024, imageQuality: 85);
+    if (picked != null && mounted) {
+      setState(() => _pendingImagePath = picked.path);
+    }
+  }
+
+  void _showImagePickerSheet() {
+    showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => Container(
+            padding: const EdgeInsets.all(20),
+            decoration: const BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 40, height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(color: AppColors.border,
+                      borderRadius: BorderRadius.circular(100))),
+              Text('Envoyer une image', style: GoogleFonts.nunito(
+                  fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.g900)),
+              const SizedBox(height: 16),
+              Row(children: [
+                Expanded(child: _ImagePickerOption(
+                    icon: Icons.camera_alt_rounded,
+                    label: 'Caméra',
+                    onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.camera); })),
+                const SizedBox(width: 12),
+                Expanded(child: _ImagePickerOption(
+                    icon: Icons.photo_library_rounded,
+                    label: 'Galerie',
+                    onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.gallery); })),
+              ]),
+              SizedBox(height: MediaQuery.of(ctx).padding.bottom + 8),
+            ])));
   }
 
   void _scrollToBottom({bool animated = true}) {
@@ -547,67 +605,115 @@ class _ChatScreenState extends State<ChatScreen> {
             ])),
       ]));
 
-  // ── Barre de saisie — bouton qui morph micro ↔ envoi ─────
+  // ── Barre de saisie ─ bouton qui morph micro ↔ envoi ─────
   Widget _buildInputBar() => Container(
-      padding: EdgeInsets.fromLTRB(12, 10, 12, 10 + MediaQuery.of(context).padding.bottom),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, 10 + MediaQuery.of(context).padding.bottom),
       decoration: const BoxDecoration(
           color: AppColors.surface,
           border: Border(top: BorderSide(color: AppColors.border, width: 1.5))),
-      child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, _) {
-            final hasText = _controller.text.trim().isNotEmpty;
-            final showMic = !hasText && _speechAvailable;
-
-            return Row(children: [
-              Expanded(child: TextField(
-                  controller: _controller,
-                  minLines: 1, maxLines: 4,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  style: GoogleFonts.nunitoSans(fontSize: 14, color: AppColors.t1),
-                  decoration: InputDecoration(
-                      hintText: _listening
-                          ? 'Parlez maintenant...'
-                          : 'Posez votre question agronomique...',
-                      hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
-                      filled: true, fillColor: AppColors.surface2,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none)))),
-              const SizedBox(width: 8),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                transitionBuilder: (child, anim) => ScaleTransition(
-                    scale: anim, child: FadeTransition(opacity: anim, child: child)),
-                child: showMic
-                    ? GestureDetector(
-                    key: const ValueKey('mic'),
-                    onTap: _sending ? null : _toggleListening,
-                    child: Container(width: 46, height: 46,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Preview image en attente
+        if (_pendingImagePath != null)
+          Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 4),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: AppColors.surface2,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border)),
+              child: Row(children: [
+                ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(File(_pendingImagePath!),
+                        width: 56, height: 56, fit: BoxFit.cover)),
+                const SizedBox(width: 10),
+                Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Image prête à envoyer', style: GoogleFonts.nunito(
+                      fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.g700)),
+                  Text('Ajoutez un message ou envoyez directement',
+                      style: GoogleFonts.nunitoSans(fontSize: 10, color: AppColors.t3)),
+                ])),
+                GestureDetector(
+                    onTap: () => setState(() => _pendingImagePath = null),
+                    child: Container(width: 28, height: 28,
                         decoration: BoxDecoration(
-                            color: _listening
-                                ? AppColors.red.withOpacity(0.1) : AppColors.g700,
-                            shape: BoxShape.circle,
-                            border: _listening
-                                ? Border.all(color: AppColors.red, width: 1.5) : null),
-                        child: Icon(_listening
-                            ? Icons.mic_rounded : Icons.mic_none_rounded,
-                            color: _listening ? AppColors.red : Colors.white, size: 20)))
-                    : GestureDetector(
-                    key: const ValueKey('send'),
-                    onTap: (hasText && !_sending) ? () => _send() : null,
-                    child: Container(width: 46, height: 46,
-                        decoration: BoxDecoration(
-                            color: (hasText && !_sending)
-                                ? AppColors.g700 : AppColors.surface2,
+                            color: AppColors.red.withOpacity(0.1),
                             shape: BoxShape.circle),
-                        child: Icon(Icons.send_rounded,
-                            color: (hasText && !_sending)
-                                ? Colors.white : AppColors.t4, size: 20))),
-              ),
-            ]);
-          }));
+                        child: const Icon(Icons.close_rounded,
+                            size: 14, color: AppColors.red))),
+              ])),
+        const SizedBox(height: 10),
+        AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              final hasText = _controller.text.trim().isNotEmpty;
+              final hasContent = hasText || _pendingImagePath != null;
+              final showMic = !hasContent && _speechAvailable;
+
+              return Row(children: [
+                // Bouton caméra/galerie
+                GestureDetector(
+                    onTap: _sending ? null : _showImagePickerSheet,
+                    child: Container(width: 40, height: 40,
+                        decoration: BoxDecoration(
+                            color: AppColors.surface2,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppColors.border)),
+                        child: Icon(Icons.camera_alt_rounded,
+                            size: 18, color: _sending ? AppColors.t4 : AppColors.g700))),
+                const SizedBox(width: 8),
+                Expanded(child: TextField(
+                    controller: _controller,
+                    minLines: 1, maxLines: 4,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    style: GoogleFonts.nunitoSans(fontSize: 14, color: AppColors.t1),
+                    decoration: InputDecoration(
+                        hintText: _pendingImagePath != null
+                            ? 'Décrivez l\'image (optionnel)...'
+                            : _listening
+                                ? 'Parlez maintenant...'
+                                : 'Posez votre question agronomique...',
+                        hintStyle: GoogleFonts.nunitoSans(fontSize: 13, color: AppColors.t4),
+                        filled: true, fillColor: AppColors.surface2,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none)))),
+                const SizedBox(width: 8),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  transitionBuilder: (child, anim) => ScaleTransition(
+                      scale: anim, child: FadeTransition(opacity: anim, child: child)),
+                  child: showMic
+                      ? GestureDetector(
+                      key: const ValueKey('mic'),
+                      onTap: _sending ? null : _toggleListening,
+                      child: Container(width: 46, height: 46,
+                          decoration: BoxDecoration(
+                              color: _listening
+                                  ? AppColors.red.withOpacity(0.1) : AppColors.g700,
+                              shape: BoxShape.circle,
+                              border: _listening
+                                  ? Border.all(color: AppColors.red, width: 1.5) : null),
+                          child: Icon(_listening
+                              ? Icons.mic_rounded : Icons.mic_none_rounded,
+                              color: _listening ? AppColors.red : Colors.white, size: 20)))
+                      : GestureDetector(
+                      key: const ValueKey('send'),
+                      onTap: (hasContent && !_sending) ? () => _send() : null,
+                      child: Container(width: 46, height: 46,
+                          decoration: BoxDecoration(
+                              color: (hasContent && !_sending)
+                                  ? AppColors.g700 : AppColors.surface2,
+                              shape: BoxShape.circle),
+                          child: Icon(Icons.send_rounded,
+                              color: (hasContent && !_sending)
+                                  ? Colors.white : AppColors.t4, size: 20))),
+                ),
+              ]);
+            }),
+      ]));
 }
 
 // ══════════════════════════════════════════════════════════
@@ -633,7 +739,7 @@ class _SuggestionCard extends StatelessWidget {
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
       child: Container(
-          height: 92,
+          height: 100, // Augmenté pour éviter le overflow de 1 pixel
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
               color: AppColors.surface,
@@ -740,31 +846,101 @@ class _MessageBubble extends StatelessWidget {
                                 border: isUser ? null : Border.all(
                                     color: AppColors.border, width: 1.5),
                                 boxShadow: isUser ? null : AppShadows.sm),
-                            child: Text(message.content, style: GoogleFonts.nunitoSans(
-                                fontSize: 14, height: 1.5,
-                                color: isUser ? Colors.white : AppColors.t1)))),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Image attachée
+                                  if (message.hasImage) ...[
+                                    ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.file(
+                                            File(message.imagePath!),
+                                            width: double.infinity,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => Container(
+                                                height: 120,
+                                                decoration: BoxDecoration(
+                                                    color: AppColors.surface2,
+                                                    borderRadius: BorderRadius.circular(10)),
+                                                child: const Center(
+                                                    child: Icon(Icons.broken_image_rounded,
+                                                        color: AppColors.t3, size: 32))))),
+                                    if (message.content.isNotEmpty)
+                                      const SizedBox(height: 8),
+                                  ],
+                                  // Texte du message
+                                  if (message.content.isNotEmpty)
+                                    MarkdownBody(
+                                      data: message.content,
+                                      styleSheet: MarkdownStyleSheet(
+                                        p: GoogleFonts.nunitoSans(
+                                          fontSize: 14, height: 1.5,
+                                          color: isUser ? Colors.white : AppColors.t1),
+                                        strong: GoogleFonts.nunitoSans(
+                                          fontSize: 14, height: 1.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: isUser ? Colors.white : AppColors.t1),
+                                        listBullet: TextStyle(
+                                          color: isUser ? Colors.white : AppColors.t1),
+                                      ),
+                                    ),
+                                ]))),
                   ]),
               if (!isUser && message.sources.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Wrap(spacing: 6, runSpacing: 6,
                     children: message.sources.map((s) => GestureDetector(
                         onTap: () => onSourceTap(s),
-                        child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                                color: AppColors.g50,
-                                borderRadius: BorderRadius.circular(100),
-                                border: Border.all(color: AppColors.g300)),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              const Text('📚', style: TextStyle(fontSize: 10)),
-                              const SizedBox(width: 4),
-                              Text(s, style: GoogleFonts.nunito(
-                                  fontSize: 10, fontWeight: FontWeight.w700,
-                                  color: AppColors.g700)),
-                            ])))).toList()),
+                        child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                                maxWidth: MediaQuery.of(context).size.width * 0.75),
+                            child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                    color: AppColors.g50,
+                                    borderRadius: BorderRadius.circular(100),
+                                    border: Border.all(color: AppColors.g300)),
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  const Text('📚', style: TextStyle(fontSize: 10)),
+                                  const SizedBox(width: 4),
+                                  Flexible(child: Text(s,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.nunito(
+                                          fontSize: 10, fontWeight: FontWeight.w700,
+                                          color: AppColors.g700))),
+                                ]))))).toList()),
               ],
             ]));
   }
+}
+
+// ── Option du picker image ─────────────────────────────────────
+class _ImagePickerOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _ImagePickerOption({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+      onTap: onTap,
+      child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          decoration: BoxDecoration(
+              color: AppColors.g50,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.g300)),
+          child: Column(children: [
+            Container(width: 48, height: 48,
+                decoration: BoxDecoration(
+                    color: AppColors.g700.withOpacity(0.1),
+                    shape: BoxShape.circle),
+                child: Icon(icon, color: AppColors.g700, size: 24)),
+            const SizedBox(height: 8),
+            Text(label, style: GoogleFonts.nunito(
+                fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.g900)),
+          ])));
 }
 
 // ── Petit point rouge pulsant (indicateur d'écoute) ─────────

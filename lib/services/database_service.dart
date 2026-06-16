@@ -15,7 +15,7 @@ class DatabaseService {
 
   static Database? _db;
   static const String _dbName    = 'agriscan.db';
-  static const int    _dbVersion = 4;
+  static const int    _dbVersion = 5;
   static const _uuid  = Uuid();
 
   // ── Accès base de données ─────────────────────────────
@@ -142,6 +142,38 @@ class DatabaseService {
       ''');
       }
     }
+
+    if (oldVersion < 4) {
+      // Table pour la base documentaire RAG (agriscan_database.json)
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS rag_docs (
+          id           TEXT PRIMARY KEY,
+          title        TEXT,
+          summary      TEXT,
+          content      TEXT,
+          category     TEXT,
+          source_file  TEXT
+        )
+      ''');
+
+      // Table pour la mémoire utilisateur auto-alimentée
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS user_memory (
+          id         TEXT PRIMARY KEY,
+          type       TEXT,
+          key        TEXT,
+          value      TEXT,
+          date       TEXT,
+          metadata   TEXT
+        )
+      ''');
+    }
+
+    if (oldVersion < 5) {
+      try {
+        await db.execute('ALTER TABLE chat_messages ADD COLUMN image_path TEXT');
+      } catch (_) {}
+    }
   }
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
@@ -218,6 +250,7 @@ class DatabaseService {
         role            TEXT,
         content         TEXT,
         sources         TEXT,
+        image_path      TEXT,
         created_at      TEXT
       )
     ''');
@@ -228,6 +261,28 @@ class DatabaseService {
         title      TEXT,
         created_at TEXT,
         updated_at TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE rag_docs (
+        id           TEXT PRIMARY KEY,
+        title        TEXT,
+        summary      TEXT,
+        content      TEXT,
+        category     TEXT,
+        source_file  TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE user_memory (
+        id         TEXT PRIMARY KEY,
+        type       TEXT,
+        key        TEXT,
+        value      TEXT,
+        date       TEXT,
+        metadata   TEXT
       )
     ''');
 

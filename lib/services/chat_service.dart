@@ -1,8 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'database_service.dart';
 import 'knowledge_base_service.dart';
+import 'gemma_service.dart';
+import 'memory_service.dart';
 import '../config/secrets.dart';
 
 // ══════════════════════════════════════════════════════════
@@ -20,6 +25,7 @@ class ChatMessage {
   final String role; // 'user' | 'assistant'
   final String content;
   final List<String> sources; // titres des docs RAG utilisés (assistant)
+  final String? imagePath; // chemin de l'image attachée (user)
   final DateTime createdAt;
 
   const ChatMessage({
@@ -27,17 +33,20 @@ class ChatMessage {
     required this.role,
     required this.content,
     this.sources = const [],
+    this.imagePath,
     required this.createdAt,
   });
 
   bool get isUser => role == 'user';
+  bool get hasImage => imagePath != null && imagePath!.isNotEmpty;
 
   factory ChatMessage.fromMap(Map<String, dynamic> m) => ChatMessage(
-    id     : m['id'] as String,
-    role   : m['role'] as String,
-    content: m['content'] as String,
-    sources: (m['sources'] as String? ?? '')
+    id       : m['id'] as String,
+    role     : m['role'] as String,
+    content  : m['content'] as String,
+    sources  : (m['sources'] as String? ?? '')
         .split('|||').where((s) => s.isNotEmpty).toList(),
+    imagePath: m['image_path'] as String?,
     createdAt: DateTime.parse(
         m['created_at'] as String? ?? DateTime.now().toIso8601String()),
   );
@@ -47,6 +56,7 @@ class ChatMessage {
     'role'      : role,
     'content'   : content,
     'sources'   : sources.join('|||'),
+    'image_path': imagePath ?? '',
     'created_at': createdAt.toIso8601String(),
   };
 }
@@ -108,11 +118,11 @@ class ChatService {
   ChatService._();
 
   final _db = DatabaseService();
-  final _kb = KnowledgeBaseService();
   static const _uuid = Uuid();
 
-  static const String _url   = 'https://api.groq.com/openai/v1/chat/completions';
-  static const String _model = 'llama-3.1-8b-instant';
+  static const String _url        = 'https://api.groq.com/openai/v1/chat/completions';
+  static const String _model      = 'llama-3.1-8b-instant';
+  static const String _visionModel = 'llama-3.2-11b-vision-preview';
   static String get _key => Secrets.groqApiKey;
 
   // ════════════════════════════════════════════════════
@@ -203,7 +213,7 @@ class ChatService {
   }
 
   // ════════════════════════════════════════════════════
-  //  ENVOI D'UN MESSAGE
+  //  ENVOI D'UN MESSAGE (HYBRIDE : GROQ + GEMMA LOCAL)
   // ════════════════════════════════════════════════════
   Future<ChatMessage> sendMessage({
     required String conversationId,
@@ -218,49 +228,77 @@ class ChatService {
     await _maybeSetTitle(conversationId, text);
     await _touchConversation(conversationId);
 
-    // Récupération RAG
-    final relevant = await _kb.search(text, topK: 3);
-    final systemPrompt = _buildSystemPrompt(context, relevant);
+    // Initialisation
+    await KnowledgeBaseService().seedIfEmpty();
 
-    final messages = <Map<String, String>>[
-      {'role': 'system', 'content': systemPrompt},
-      ...history.map((m) => {'role': m.role, 'content': m.content}),
-      {'role': 'user', 'content': text},
-    ];
+    // Vérification de la connexion
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
+        connectivityResult.contains(ConnectivityResult.wifi);
 
     String content;
-    try {
-      final response = await http.post(
-        Uri.parse(_url),
-        headers: {
-          'Content-Type' : 'application/json',
-          'Authorization': 'Bearer $_key',
-        },
-        body: jsonEncode({
-          'model'      : _model,
-          'messages'   : messages,
-          'temperature': 0.4,
-          'max_tokens' : 700,
-        }),
-      ).timeout(const Duration(seconds: 30));
+    List<String> sourceTitles = [];
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        content = (data['choices'][0]['message']['content'] as String).trim();
-      } else {
-        content = 'Désolé, je n\'ai pas pu contacter le service IA '
-            '(erreur ${response.statusCode}). Réessayez dans un instant.';
+    // Récupération RAG (Nouveau système JSON 1800+ chunks)
+    final ragDocs = await KnowledgeBaseService().search(text, topK: 3);
+    sourceTitles = ragDocs.map((d) => d.title).toList();
+    
+    // Récupération Mémoire auto-alimentée
+    MemoryService().setGemmaCallback(
+      (prompt) => GemmaService().sendOneShot(prompt),
+    );
+    MemoryService().analyzeAndMemorize(text);
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
+    if (isOnline) {
+      // ☁️ MODE CLOUD : GROQ
+      print("📶 Chat : Réseau détecté → Groq (Cloud)");
+      try {
+        final systemPrompt = _buildSystemPrompt(context, ragDocs, memoryContext);
+
+        final messages = <Map<String, String>>[
+          {'role': 'system', 'content': systemPrompt},
+          ...history.map((m) => {'role': m.role, 'content': m.content}),
+          {'role': 'user', 'content': text},
+        ];
+
+        final response = await http.post(
+          Uri.parse(_url),
+          headers: {
+            'Content-Type' : 'application/json',
+            'Authorization': 'Bearer $_key',
+          },
+          body: jsonEncode({
+            'model'      : _model,
+            'messages'   : messages,
+            'temperature': 0.4,
+            'max_tokens' : 700,
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          content = (data['choices'][0]['message']['content'] as String).trim();
+        } else {
+          // Fallback vers Gemma si Groq échoue
+          print("⚠️ Groq erreur ${response.statusCode}, bascule vers Gemma...");
+          content = await _sendViaGemma(text, context, ragDocs, memoryContext);
+        }
+      } catch (e) {
+        print("⚠️ Échec Cloud ($e), bascule vers Gemma...");
+        content = await _sendViaGemma(text, context, ragDocs, memoryContext);
       }
-    } catch (e) {
-      content = 'Connexion impossible. Vérifiez votre connexion internet '
-          'et réessayez.';
+    } else {
+      // 📴 MODE HORS-LIGNE : GEMMA LOCAL
+      print("📴 Chat : Pas de réseau → Gemma (Edge AI)");
+      content = await _sendViaGemma(text, context, ragDocs, memoryContext);
     }
 
     final reply = ChatMessage(
       id        : _uuid.v4(),
       role      : 'assistant',
       content   : content,
-      sources   : relevant.map((d) => d.title).toList(),
+      sources   : sourceTitles,
       createdAt : DateTime.now(),
     );
     await _persist(conversationId, reply);
@@ -269,21 +307,175 @@ class ChatService {
   }
 
   // ════════════════════════════════════════════════════
+  //  ENVOI D'UN MESSAGE AVEC IMAGE (GROQ VISION)
+  // ════════════════════════════════════════════════════
+  Future<ChatMessage> sendMessageWithImage({
+    required String conversationId,
+    required String text,
+    required String imagePath,
+    required List<ChatMessage> history,
+    required ChatContext context,
+  }) async {
+    // Persiste le message utilisateur avec l'image
+    final userMsg = ChatMessage(
+        id: _uuid.v4(), role: 'user', content: text,
+        imagePath: imagePath, createdAt: DateTime.now());
+    await _persist(conversationId, userMsg);
+    await _maybeSetTitle(conversationId, text.isNotEmpty ? text : '📷 Image envoyée');
+    await _touchConversation(conversationId);
+
+    await KnowledgeBaseService().seedIfEmpty();
+
+    MemoryService().setGemmaCallback(
+    (prompt) => GemmaService().sendOneShot(prompt),
+  );
+  MemoryService().analyzeAndMemorize(text);
+
+
+    final connectivityResult = await Connectivity().checkConnectivity();
+    final isOnline = connectivityResult.contains(ConnectivityResult.mobile) ||
+        connectivityResult.contains(ConnectivityResult.wifi);
+
+    String content;
+    List<String> sourceTitles = [];
+
+    // RAG + Mémoire
+    final ragDocs = await KnowledgeBaseService().search(text.isNotEmpty ? text : 'image plante maladie', topK: 3);
+    sourceTitles = ragDocs.map((d) => d.title).toList();
+    final memoryContext = await MemoryService().buildMemoryPromptBlock();
+
+    if (isOnline) {
+      print("📷 Chat Vision : Réseau détecté → Groq Vision");
+      try {
+        // Encoder l'image en base64
+        final imageFile = File(imagePath);
+        final bytes = await imageFile.readAsBytes();
+        final base64Image = base64Encode(bytes);
+        final mimeType = imagePath.toLowerCase().endsWith('.png')
+            ? 'image/png' : 'image/jpeg';
+
+        final systemPrompt = _buildSystemPrompt(context, ragDocs, memoryContext);
+
+        final userContent = <Map<String, dynamic>>[
+          if (text.isNotEmpty)
+            {'type': 'text', 'text': text},
+          if (text.isEmpty)
+            {'type': 'text', 'text': 'Analyse cette image de plante/culture. '
+                'Identifie les maladies, ravageurs ou problèmes visibles '
+                'et donne des recommandations.'},
+          {
+            'type': 'image_url',
+            'image_url': {'url': 'data:$mimeType;base64,$base64Image'},
+          },
+        ];
+
+        final messages = <Map<String, dynamic>>[
+          {'role': 'system', 'content': systemPrompt},
+          ...history.where((m) => !m.hasImage).map((m) =>
+              {'role': m.role, 'content': m.content}),
+          {'role': 'user', 'content': userContent},
+        ];
+
+        final response = await http.post(
+          Uri.parse(_url),
+          headers: {
+            'Content-Type' : 'application/json',
+            'Authorization': 'Bearer $_key',
+          },
+          body: jsonEncode({
+            'model'      : _visionModel,
+            'messages'   : messages,
+            'temperature': 0.4,
+            'max_tokens' : 1024,
+          }),
+        ).timeout(const Duration(seconds: 60));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          content = (data['choices'][0]['message']['content'] as String).trim();
+        } else {
+          print("⚠️ Groq Vision erreur ${response.statusCode}");
+          content = '⚠️ L\'analyse d\'image nécessite une connexion stable. '
+              'Erreur : ${response.statusCode}. Réessayez.';
+        }
+      } catch (e) {
+        print("⚠️ Échec Groq Vision ($e)");
+        content = '⚠️ Impossible d\'analyser l\'image : $e. '
+            'Vérifiez votre connexion et réessayez.';
+      }
+    } else {
+      print("📴 Chat : Pas de réseau → Image locale (Gemma) non supportée");
+      if (text.isNotEmpty) {
+        final gemmaResponse = await _sendViaGemma(
+          text,
+          context,
+          ragDocs,
+          memoryContext,
+        );
+        content = "⚠️ Mode hors-ligne : l'image a été ignorée car l'IA locale ne gère que le texte.\n\n\$gemmaResponse";
+      } else {
+        content = "⚠️ L'analyse d'image nécessite une connexion internet. L'IA locale ne gère que le texte. Veuillez vous connecter.";
+      }
+    }
+
+    final reply = ChatMessage(
+      id        : _uuid.v4(),
+      role      : 'assistant',
+      content   : content,
+      sources   : sourceTitles,
+      createdAt : DateTime.now(),
+    );
+    await _persist(conversationId, reply);
+    await _touchConversation(conversationId);
+    return reply;
+  }
+
+  // ════════════════════════════════════════════════════
+  //  CHAT VIA GEMMA LOCAL (Edge AI)
+  // ════════════════════════════════════════════════════
+  Future<String> _sendViaGemma(String text, ChatContext ctx, List<KnowledgeDocument> docs, String memoryContext) async {
+    try {
+      final gemma = GemmaService();
+      if (!gemma.isInitialized) {
+        await gemma.initAI();
+      }
+      if (!gemma.isInitialized) {
+        return 'IA locale non disponible. Vérifiez que le modèle Gemma '
+            'est dans le dossier Download de votre téléphone.';
+      }
+
+      final docsBlock = docs.isEmpty
+          ? ''
+          : docs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n');
+
+      // Construire un prompt contextuel pour Gemma
+      final systemPrompt = '''
+Tu es l'Assistant AgriScan pour ${ctx.region}.
+Culture: ${ctx.culture}. Climat: ${ctx.climate}. Sol: ${ctx.soil}.
+Réponds clair et concis (4-6 phrases).
+$memoryContext
+Docs RAG pertinents:
+$docsBlock
+''';
+      final response = await gemma.sendChatMessage(
+        text,
+        systemPrompt: systemPrompt,
+      );
+      return response;
+    } catch (e) {
+      print("❌ Erreur Gemma Chat : $e");
+      return 'Connexion impossible et IA locale indisponible. '
+          'Réessayez quand vous aurez une connexion internet.';
+    }
+  }
+
+  // ════════════════════════════════════════════════════
   //  PROMPT SYSTÈME
   // ════════════════════════════════════════════════════
-  String _buildSystemPrompt(ChatContext ctx, List<KnowledgeDocument> docs) {
+  String _buildSystemPrompt(ChatContext ctx, List<KnowledgeDocument> docs, String memoryContext) {
     final docsBlock = docs.isEmpty
         ? ''
         : docs.map((d) => '### ${d.title}\n${d.content}').join('\n\n');
-
-    final lastScanBlock = ctx.lastScanDisease != null
-        ? '\nDERNIER DIAGNOSTIC AGRISCAN : ${ctx.lastScanDisease}'
-        '${ctx.lastScanPlant != null ? ' sur ${ctx.lastScanPlant}' : ''}'
-        '${ctx.lastScanConfidence != null
-        ? ' (confiance ${(ctx.lastScanConfidence! * 100).round()}%)'
-        : ''}'
-        '${ctx.lastScanDate != null ? ', le ${ctx.lastScanDate}' : ''}.\n'
-        : '';
 
     final knowledgeBlock = docsBlock.isNotEmpty
         ? '\nBASE DE CONNAISSANCES PERTINENTE '
@@ -296,19 +488,17 @@ cultures de la région ${ctx.region}.
 Tu réponds aux agriculteurs en français, de façon chaleureuse, claire et
 concise (4 à 6 phrases, sauf si l'utilisateur demande plus de détails).
 
-CONTEXTE DE L'AGRICULTEUR :
+CONTE TEXTE ET MÉMOIRE :
 - Région : ${ctx.region}
 - Culture principale : ${ctx.culture}
 - Climat : ${ctx.climate}
 - Type de sol : ${ctx.soil}
 - Saison : ${ctx.season}
-$lastScanBlock$knowledgeBlock
+$memoryContext
+$knowledgeBlock
 RÈGLES :
-- Si la question porte sur une maladie présente dans la base de
-  connaissances ci-dessus, base ta réponse STRICTEMENT sur ces
-  informations (nature fongique/virale, agent pathogène, traitement).
-- Si tu ne sais pas, dis-le honnêtement et conseille de consulter un
-  technicien agricole local.
+- Base ta réponse STRICTEMENT sur la base de connaissances et la mémoire.
+- Si tu ne sais pas, dis-le honnêtement.
 - N'invente jamais de noms de produits chimiques non vérifiés.
 - Reste toujours dans le domaine agricole.
 ''';

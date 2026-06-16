@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/ml_service.dart';
 import '../services/database_service.dart';
+import '../services/dataset_service.dart';
 import 'disease_result_screen.dart';
 
 // ══════════════════════════════════════════════════════════
@@ -119,6 +120,15 @@ class _AnalyzingScreenState extends State<AnalyzingScreen>
       // Mettre à jour le scan en BD avec le vrai résultat
       if (widget.scanId != null) {
         await _updateScanResult(result);
+      }
+
+      // Mettre en cache pour le dataset ML
+      if (widget.imageFile != null) {
+        DatasetService().cacheImageForDataset(
+          originalImage: widget.imageFile!,
+          plantType: result.plantType.name,
+          diseaseName: result.diseaseName,
+        );
       }
 
       // Progression → 100%
