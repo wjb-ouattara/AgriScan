@@ -8,6 +8,8 @@ import 'disease_result_screen.dart';
 import 'field_map_screen.dart';
 import 'drone_simulation_screen.dart';
 import 'recommendations_screen.dart';
+import 'marketplace_screen.dart';
+import 'marketplace_orders_screen.dart';
 import 'video_analysis_screen.dart';
 import 'chat_screen.dart';
 
@@ -28,22 +30,25 @@ class _AppShellState extends State<AppShell>
   final _screens = const [
     ScannerScreen(),
     HistoryScreen(),
-    ProfileScreen(),
+    MarketplaceScreen(),   // index 2 — Boutique
+    ProfileScreen(),       // index 3
   ];
 
   static const _navItems = [
     _NavDef('📷', 'Scanner',    'Analyser une plante',  0),
     _NavDef('📊', 'Historique', 'Mes analyses',         1),
-    _NavDef('👤', 'Profil',     'Mon compte',           2),
+    _NavDef('🛒', 'Boutique',   'Produits & commandes', 2),
+    _NavDef('👤', 'Profil',     'Mon compte',           3),
   ];
 
   static const _extraItems = [
-    _NavDef('🔬', 'Résultat',        'Dernier diagnostic',  -1),
-    _NavDef('🗺️', 'Carte champ',     'Zones infectées',     -2),
-    _NavDef('🚁', 'Simulation',      'Traitement drone',    -3),
-    _NavDef('💊', 'Recommandations', 'Dosage & traitement', -4),
-    _NavDef('🎥', 'Analyse vidéo',   'Survol drone (vidéo)', -5),
-    _NavDef('💬', 'Assistant IA', 'Questions agronomiques', -6),
+    _NavDef('🔬', 'Résultat',        'Dernier diagnostic',   -1),
+    _NavDef('🗺️', 'Carte champ',     'Zones infectées',      -2),
+    _NavDef('🚁', 'Simulation',      'Traitement drone',     -3),
+    _NavDef('💊', 'Recommandations', 'Dosage & traitement',  -4),
+    _NavDef('📦', 'Mes commandes',   'Historique boutique',  -5),
+    _NavDef('🎥', 'Analyse vidéo',   'Simulation drone IA',  -6),
+    _NavDef('💬', 'Assistant chat',  'Agronome IA (RAG)',    -7),
   ];
 
   @override
@@ -88,8 +93,9 @@ class _AppShellState extends State<AppShell>
       case -2: target = const FieldMapScreen();         break;
       case -3: target = const DroneSimulationScreen();  break;
       case -4: target = const RecommendationsScreen();  break;
-      case -5: target = const VideoAnalysisScreen();    break;
-      case -6: target = const ChatScreen();             break;
+      case -5: target = const MarketplaceOrdersScreen(); break;
+      case -6: target = const VideoAnalysisScreen();    break;
+      case -7: target = const ChatScreen();             break;
       default: return;
     }
     Navigator.push(context, PageRouteBuilder(
@@ -206,7 +212,7 @@ class _TopBar extends StatelessWidget {
         Padding(
             padding: const EdgeInsets.only(right: 16, left: 8),
             child: GestureDetector(
-                onTap: () => onTabSelect(2),
+                onTap: () => onTabSelect(3),
                 child: Container(width: 36, height: 36,
                     decoration: BoxDecoration(color: AppColors.g700,
                         borderRadius: BorderRadius.circular(10)),
@@ -263,6 +269,7 @@ class _SideDrawer extends StatelessWidget {
         child: SafeArea(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ── En-tête fixe ────────────────────────────
               Padding(padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
                   child: Row(children: [
                     Container(width: 44, height: 44,
@@ -295,19 +302,28 @@ class _SideDrawer extends StatelessWidget {
                                 size: 16, color: AppColors.t3))),
                   ])),
               const Divider(color: AppColors.border, height: 1),
-              const SizedBox(height: 8),
-              _DrawerSection('NAVIGATION'),
-              ...navItems.map((item) => _DrawerItem(
-                  item: item, active: item.index == index,
-                  onTap: () => onSelect(item.index))),
-              const SizedBox(height: 8),
-              const Divider(color: AppColors.border, height: 1),
-              const SizedBox(height: 8),
-              _DrawerSection('ANALYSES'),
-              ...extraItems.map((item) => _DrawerItem(
-                  item: item, active: false,
-                  onTap: () => onSelect(item.index))),
-              const Spacer(),
+
+              // ── Liste scrollable ─────────────────────────
+              Expanded(child: SingleChildScrollView(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 8),
+                        _DrawerSection('NAVIGATION'),
+                        ...navItems.map((item) => _DrawerItem(
+                            item: item, active: item.index == index,
+                            onTap: () => onSelect(item.index))),
+                        const SizedBox(height: 8),
+                        const Divider(color: AppColors.border, height: 1),
+                        const SizedBox(height: 8),
+                        _DrawerSection('ANALYSES & OUTILS'),
+                        ...extraItems.map((item) => _DrawerItem(
+                            item: item, active: false,
+                            onTap: () => onSelect(item.index))),
+                        const SizedBox(height: 16),
+                      ]))),
+
+              // ── Pied fixe ────────────────────────────────
               const Divider(color: AppColors.border, height: 1),
               Padding(padding: const EdgeInsets.all(16),
                   child: Row(children: [
@@ -398,6 +414,12 @@ class _BottomBar extends StatelessWidget {
             label: 'Scanner',
             active: 0 == index,
             onTap: () => onSelect(0))),
+        // Boutique
+        Expanded(child: _BotItem(
+            icon: Icons.storefront_rounded,
+            label: 'Boutique',
+            active: 2 == index,
+            onTap: () => onSelect(2))),
         // Bouton central surélevé
         Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -422,6 +444,12 @@ class _BottomBar extends StatelessWidget {
             label: 'Historique',
             active: 1 == index,
             onTap: () => onSelect(1))),
+        // Profil
+        Expanded(child: _BotItem(
+            icon: Icons.person_outline_rounded,
+            label: 'Profil',
+            active: 3 == index,
+            onTap: () => onSelect(3))),
       ]),
     );
   }
