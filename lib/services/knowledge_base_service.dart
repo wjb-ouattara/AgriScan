@@ -106,7 +106,7 @@ class KnowledgeBaseService {
           .toList();
 
       for (final path in jsonPaths) {
-        print("➡️ Importation automatique de : $path");
+        print(" Importation automatique de : $path");
         try {
           String jsonString = await rootBundle.loadString(path);
           if (jsonString.startsWith('\ufeff')) {
@@ -150,13 +150,13 @@ class KnowledgeBaseService {
             print("... $countItems documents vectorisés depuis $path ...");
           }
         }
-        print("✅ Terminé : $countItems documents importés depuis $path !");
+        print("Terminé : $countItems documents importés depuis $path !");
         } catch (e) {
-          print("⚠️ Erreur fichier $path: $e");
+          print(" Erreur fichier $path: $e");
         }
       }
     } catch (e) {
-      print("⚠️ Erreur lors du chargement des JSON depuis les assets: $e");
+      print(" Erreur lors du chargement des JSON depuis les assets: $e");
     }
   }
 

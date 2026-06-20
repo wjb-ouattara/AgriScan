@@ -40,16 +40,16 @@ class GemmaService {
       final internalPath = '${appDocsDir.path}/gemma-4-E2B-it.litertlm';
 
       if (!File(internalPath).existsSync()) {
-        print("⏳ Copie du modèle vers le stockage interne (cela peut prendre 10 à 30 secondes)...");
+        print(" Copie du modèle vers le stockage interne (cela peut prendre 10 à 30 secondes)...");
         final publicFile = File(publicPath);
         if (!publicFile.existsSync()) {
-          print("❌ Fichier introuvable dans Download : $publicPath");
+          print(" Fichier introuvable dans Download : $publicPath");
           return;
         }
         await publicFile.copy(internalPath);
-        print("✅ Copie terminée !");
+        print(" Copie terminée !");
       } else {
-        print("ℹ️ Le modèle est déjà dans le stockage interne.");
+        print(" Le modèle est déjà dans le stockage interne.");
       }
 
       print("--- ÉTAPE 2 : Chargement de Gemma ---");
@@ -67,14 +67,14 @@ class GemmaService {
       print("--- ÉTAPE 4 : Initialisation Vector Store (Gecko) ---");
       final hasGecko = await FlutterGemma.isModelInstalled('Gecko_256_quant.tflite');
       if (!hasGecko) {
-        print("⏳ Téléchargement du modèle Gecko (requis 1ère fois uniquement)...");
+        print(" Téléchargement du modèle Gecko (requis 1ère fois uniquement)...");
         await FlutterGemma.installEmbedder()
             .modelFromNetwork('https://huggingface.co/litert-community/Gecko-110m-en/resolve/main/Gecko_256_quant.tflite')
             .tokenizerFromNetwork('https://huggingface.co/litert-community/Gecko-110m-en/resolve/main/sentencepiece.model')
             .install();
-        print("✅ Gecko téléchargé avec succès !");
+        print(" Gecko téléchargé avec succès !");
       } else {
-        print("ℹ️ Modèle Gecko déjà présent, chargement hors-ligne.");
+        print(" Modèle Gecko déjà présent, chargement hors-ligne.");
         final appDocsDir = await getApplicationDocumentsDirectory();
         await FlutterGemma.installEmbedder()
             .modelFromFile('${appDocsDir.path}/Gecko_256_quant.tflite')
@@ -84,10 +84,10 @@ class GemmaService {
       await FlutterGemmaPlugin.instance.initializeVectorStore('rag_store');
 
       isInitialized = true;
-      print("🚀 IA Gemma et Vector Store chargés avec succès !");
+      print(" IA Gemma et Vector Store chargés avec succès !");
 
     } catch (e) {
-      print("❌ Erreur de chargement Gemma : $e");
+      print(" Erreur de chargement Gemma : $e");
     }
   }
 
@@ -151,7 +151,7 @@ class GemmaService {
       }
       return "Pas de réponse.";
     } catch (e) {
-      print("❌ Erreur chat Gemma : $e");
+      print(" Erreur chat Gemma : $e");
       return "Erreur de l'IA locale. Réessayez.";
     }
   }

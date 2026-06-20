@@ -90,19 +90,19 @@ class AgriScanAIService {
           throw AIServiceException('Erreur Groq ${response.statusCode}');
         }
       } catch (e) {
-        print("⚠️ Échec du Cloud ($e). Bascule vers le mode local de secours...");
+        print(" Échec du Cloud ($e). Bascule vers le mode local de secours...");
         result = await _runLocalAnalysis(diseaseName, plantName, key);
       }
 
     } else {
       // 📱 MODE HORS-LIGNE : GEMMA (Local GPU)
-      print("📴 Pas de réseau : Analyse Edge AI via Gemma sur le GPU");
+      print(" Pas de réseau : Analyse Edge AI via Gemma sur le GPU");
       result = await _runLocalAnalysis(diseaseName, plantName, key);
     }
 
     _cache[key] = result;
 
-    // 🧠 Enregistrer dans la mémoire utilisateur
+    // Enregistrer dans la mémoire utilisateur
     if (diseaseName.toLowerCase() != "sain") {
       await MemoryService().recordScan(
         plant: plantName,
@@ -139,7 +139,7 @@ class AgriScanAIService {
 
       String rawText = await gemmaService.sendMessage(lightPrompt);
 
-      // 🧹 NETTOYAGE DU JSON
+      //  NETTOYAGE DU JSON
       rawText = rawText.replaceAll('```json', '').replaceAll('```', '').trim();
 
       final parsed = jsonDecode(rawText) as Map<String, dynamic>;
@@ -148,7 +148,7 @@ class AgriScanAIService {
       return reco;
 
     } catch (e) {
-      print("❌ Erreur Gemma ou JSON invalide : $e");
+      print(" Erreur Gemma ou JSON invalide : $e");
       return AIRecommendation.offline(disease, plant);
     }
   }
@@ -164,11 +164,11 @@ class AgriScanAIService {
     required double confidence,
     required String region,
   }) async {
-    // 📚 Récupération du contexte RAG (Top 3 docs)
+    //  Récupération du contexte RAG (Top 3 docs)
     final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 3);
     final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n\n');
     
-    // 🧠 Récupération de la mémoire
+    //  Récupération de la mémoire
     final memoryContext = await MemoryService().buildMemoryPromptBlock();
 
     return '''
@@ -181,7 +181,7 @@ Un système d'IA a détecté la maladie suivante :
 - Confiance : ${(confidence * 100).round()}%
 - Région    : $region
 
-📚 BASE DE CONNAISSANCES (RAG)
+ BASE DE CONNAISSANCES (RAG)
 Utilise ces informations pour formuler tes conseils de traitement :
 $ragContext
 
@@ -249,11 +249,11 @@ sans balises markdown, exactement dans ce format :
     required String disease,
     required String plant,
   }) async {
-    // 📚 Récupération du contexte RAG (Top 2 docs en mode local pour gagner de la place)
+    //  Récupération du contexte RAG (Top 2 docs en mode local pour gagner de la place)
     final ragDocs = await KnowledgeBaseService().search('$disease $plant', topK: 2);
     final ragContext = ragDocs.map((d) => '--- ${d.title} ---\n${d.content}').join('\n');
     
-    // 🧠 Récupération de la mémoire
+    //  Récupération de la mémoire
     final memoryContext = await MemoryService().buildMemoryPromptBlock();
 
     return '''

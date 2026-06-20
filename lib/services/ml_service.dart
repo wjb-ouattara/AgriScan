@@ -145,10 +145,10 @@ class AgriScanMLService {
       // Debug shapes
       final inShape  = _yoloInterpreter!.getInputTensor(0).shape;
       final outShape = _yoloInterpreter!.getOutputTensor(0).shape;
-      print('✅ YOLO chargé — input: $inShape  output: $outShape');
+      print(' YOLO chargé — input: $inShape  output: $outShape');
     } catch (e) {
       _yoloAvailable = false;
-      print('⚠️  YOLO non disponible : $e');
+      print(' YOLO non disponible : $e');
     }
   }
 
@@ -161,11 +161,11 @@ class AgriScanMLService {
       _maizeAvailable = true;
       final inShape  = _maizeInterpreter!.getInputTensor(0).shape;
       final outShape = _maizeInterpreter!.getOutputTensor(0).shape;
-      print('✅ Maïs chargé : ${_currentVersion.displayName}'
+      print(' Maïs chargé : ${_currentVersion.displayName}'
           ' — input: $inShape  output: $outShape');
     } catch (e) {
       _maizeAvailable = false;
-      print('⚠️  Modèle maïs non disponible : $e');
+      print('  Modèle maïs non disponible : $e');
     }
   }
 
@@ -210,12 +210,12 @@ class AgriScanMLService {
                 ? PlantType.maize : PlantType.tomato;
           }
           image = _cropBoundingBox(image, bbox);
-          print('✅ YOLO crop: ${image.width}x${image.height}');
+          print(' YOLO crop: ${image.width}x${image.height}');
         } else {
-          print('⚠️  YOLO: rien détecté → image entière');
+          print('  YOLO: rien détecté → image entière');
         }
       } catch (e) {
-        print('⚠️ YOLO erreur : $e');
+        print(' YOLO erreur : $e');
       }
     }
 
@@ -225,7 +225,7 @@ class AgriScanMLService {
 
     if (interpreter == null) {
       sw.stop();
-      print('⚠️ Classifieur absent → mode démo');
+      print(' Classifieur absent → mode démo');
       return _demoResult(plantType, sw.elapsedMilliseconds);
     }
 
@@ -302,9 +302,9 @@ class AgriScanMLService {
     detections.sort((a, b) =>
         (b['conf'] as double).compareTo(a['conf'] as double));
 
-    print('🔍 YOLO top 5 détections :');
+    print(' YOLO top 5 détections :');
     if (detections.isEmpty) {
-      print('   ⚠️  Aucune détection > 10% (seuil actuel: '
+      print('  Aucune détection > 10% (seuil actuel: '
           '${(_yoloConfThreshold * 100).round()}%)');
     }
     for (final d in detections.take(5)) {
@@ -323,10 +323,10 @@ class AgriScanMLService {
 
     if (result != null) {
       final pct = (result.confidence * 100).round();
-      print('🔍 YOLO → ${_yoloClasses[result.classId]} conf=$pct%  '
+      print(' YOLO → ${_yoloClasses[result.classId]} conf=$pct%  '
           'crop: ${result.width.round()}x${result.height.round()}');
     } else {
-      print('🔍 YOLO → rien au-dessus du seuil ${_yoloConfThreshold}');
+      print(' YOLO → rien au-dessus du seuil ${_yoloConfThreshold}');
     }
     return result;
   }
@@ -390,12 +390,12 @@ class AgriScanMLService {
     // Garde-fou : ignorer les crops absurdes
     const minSize = 50; // pixels
     if (w <= minSize || h <= minSize) {
-      print('⚠️ YOLO crop trop petit (${w}x$h) → image entière utilisée');
+      print(' YOLO crop trop petit (${w}x$h) → image entière utilisée');
       return image;
     }
     final ratio = w / h;
     if (ratio < 0.2 || ratio > 5.0) {
-      print('⚠️ YOLO crop ratio absurde (${ratio.toStringAsFixed(2)}) → image entière utilisée');
+      print(' YOLO crop ratio absurde (${ratio.toStringAsFixed(2)}) → image entière utilisée');
       return image;
     }
 
@@ -442,7 +442,7 @@ class AgriScanMLService {
             scores[i]))
       ..sort((a, b) => b.score.compareTo(a.score));
 
-    print('🧠 Classifieur résultat : ${allScores[0].label} '
+    print(' Classifieur résultat : ${allScores[0].label} '
         '${(allScores[0].score * 100).round()}%');
 
     return DiseaseDetectionResult(

@@ -83,7 +83,7 @@ class DatasetService {
       // 1. Vérifier la connexion Internet (Mode Hors-Ligne)
       final connectivityResult = await Connectivity().checkConnectivity();
       if (connectivityResult == ConnectivityResult.none) {
-        print("📴 Pas de connexion Internet. Les images sont conservées localement pour un envoi ultérieur.");
+        print(" Pas de connexion Internet. Les images sont conservées localement pour un envoi ultérieur.");
         return false;
       }
 
@@ -131,7 +131,7 @@ class DatasetService {
         return false;
       }
 
-      print("🚀 Upload du batch vers Supabase ($zipFileName)...");
+      print(" Upload du batch vers Supabase ($zipFileName)...");
       
       await Supabase.instance.client.storage
           .from('ml_dataset_batches')
@@ -141,7 +141,7 @@ class DatasetService {
             fileOptions: const FileOptions(contentType: 'application/zip'),
           );
 
-      print("✅ Upload réussi ! Nettoyage de ${filesToUpload.length} images locales...");
+      print(" Upload réussi ! Nettoyage de ${filesToUpload.length} images locales...");
       
       // Nettoyage UNIQUEMENT des images qui ont été envoyées avec succès
       for (final file in filesToUpload) {
@@ -153,13 +153,13 @@ class DatasetService {
       // Si d'autres images sont encore en attente (backlog hors-ligne accumulé), on relance
       final remainingCount = await getPendingImagesCount();
       if (remainingCount >= minImagesToUpload) {
-        print("🔄 Il reste $remainingCount images en attente, lancement du batch suivant...");
+        print(" Il reste $remainingCount images en attente, lancement du batch suivant...");
         uploadBatches(minImagesToUpload: minImagesToUpload, maxPerBatch: maxPerBatch);
       }
 
       return true;
     } catch (e) {
-      print("❌ Erreur lors de l'upload du batch dataset (réessai automatique plus tard) : $e");
+      print(" Erreur lors de l'upload du batch dataset (réessai automatique plus tard) : $e");
       return false;
     }
   }

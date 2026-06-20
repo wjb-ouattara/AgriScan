@@ -135,7 +135,7 @@ class MemoryService {
   /// À appeler en parallèle après chaque message utilisateur.
   Future<void> analyzeAndMemorize(String userMessage) async {
     if (_gemmaCallback == null) {
-      print('⚠️ MemoryService: gemmaCallback non initialisé.');
+      print(' MemoryService: gemmaCallback non initialisé.');
       return;
     }
 
@@ -197,13 +197,13 @@ Si rien ne mérite d'être mémorisé :
 
         if (key != null && value != null) {
           await _recordSmartMemory(key, value, reason ?? '');
-          print('🧠 Mémorisé automatiquement: $key → $value');
+          print(' Mémorisé automatiquement: $key → $value');
           print('   Raison: $reason');
         }
       }
     } catch (e) {
       // Gemma n'a pas retourné de JSON valide — rien à mémoriser
-      print('🧠 MemoryService: rien à mémoriser pour ce message ($e)');
+      print(' MemoryService: rien à mémoriser pour ce message ($e)');
     }
   }
 
@@ -273,7 +273,7 @@ Si rien ne mérite d'être mémorisé :
       where: 'type = ? AND key = ?',
       whereArgs: ['smart', key],
     );
-    print('🧠 Oublié: $key');
+    print(' Oublié: $key');
   }
 
   // ─────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ Si rien ne mérite d'être mémorisé :
 
     if (rows.isEmpty) return '';
 
-    final buffer = StringBuffer("📍 Contexte de l'exploitation :\n");
+    final buffer = StringBuffer(" Contexte de l'exploitation :\n");
     for (final row in rows) {
       buffer.writeln("- ${row['key']}: ${row['value']}");
     }
@@ -328,7 +328,7 @@ Si rien ne mérite d'être mémorisé :
     // Ajouter un insight si maladies récurrentes
     final recurrent = diseaseCounts.entries.where((e) => e.value >= 2).toList();
     if (recurrent.isNotEmpty) {
-      buffer.writeln("\n⚠️ Motifs récurrents :");
+      buffer.writeln("\n Motifs récurrents :");
       for (final r in recurrent) {
         buffer.writeln("- '${r.key}' détecté ${r.value} fois récemment.");
       }
@@ -349,7 +349,7 @@ Si rien ne mérite d'être mémorisé :
 
     if (rows.isEmpty) return '';
 
-    final buffer = StringBuffer("🧠 Informations mémorisées sur l'exploitation :\n");
+    final buffer = StringBuffer(" Informations mémorisées sur l'exploitation :\n");
     for (final row in rows) {
       buffer.writeln("- ${row['key']}: ${row['value']}");
     }
@@ -393,7 +393,7 @@ ${nonEmpty.join('\n')}
   Future<void> clearAllMemory() async {
     final db = await _dbService.db;
     await db.delete('user_memory');
-    print('🧠 Mémoire complètement effacée.');
+    print(' Mémoire complètement effacée.');
   }
 
   /// Supprime uniquement les mémoires d'un type donné.

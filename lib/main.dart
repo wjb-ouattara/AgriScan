@@ -29,22 +29,22 @@ void main() async {
   await SupabaseService.initialize();
   await DatabaseService().db;
 
-  // 🛑 Initialisation de la couche native FlutterGemma
+  //  Initialisation de la couche native FlutterGemma
   try {
-    print("🔌 Initialisation de la couche native FlutterGemma...");
+    print(" Initialisation de la couche native FlutterGemma...");
     await FlutterGemma.initialize();
-    print("✅ Couche native FlutterGemma prête !");
+    print(" Couche native FlutterGemma prête !");
   } catch (e) {
-    print("⚠️ Échec de l'initialisation native de Gemma : $e");
+    print(" Échec de l'initialisation native de Gemma : $e");
   }
 
   // Vérifier si déjà connecté
   final isLoggedIn = await DatabaseService().isLoggedIn();
 
-  // ☁️ Lancement en arrière-plan du sync de Dataset (sans bloquer l'UI)
+  //  Lancement en arrière-plan du sync de Dataset (sans bloquer l'UI)
   if (isLoggedIn) {
     DatasetService().uploadBatches().catchError((e) {
-      print("⚠️ Erreur background upload dataset: $e");
+      print(" Erreur background upload dataset: $e");
       return false; // Type matching
     });
   }

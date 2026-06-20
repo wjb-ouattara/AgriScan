@@ -251,8 +251,8 @@ class ChatService {
     final memoryContext = await MemoryService().buildMemoryPromptBlock();
 
     if (isOnline) {
-      // ☁️ MODE CLOUD : GROQ
-      print("📶 Chat : Réseau détecté → Groq (Cloud)");
+      //  MODE CLOUD : GROQ
+      print(" Chat : Réseau détecté → Groq (Cloud)");
       try {
         final systemPrompt = _buildSystemPrompt(context, ragDocs, memoryContext);
 
@@ -281,16 +281,16 @@ class ChatService {
           content = (data['choices'][0]['message']['content'] as String).trim();
         } else {
           // Fallback vers Gemma si Groq échoue
-          print("⚠️ Groq erreur ${response.statusCode}, bascule vers Gemma...");
+          print(" Groq erreur ${response.statusCode}, bascule vers Gemma...");
           content = await _sendViaGemma(text, context, ragDocs, memoryContext);
         }
       } catch (e) {
-        print("⚠️ Échec Cloud ($e), bascule vers Gemma...");
+        print(" Échec Cloud ($e), bascule vers Gemma...");
         content = await _sendViaGemma(text, context, ragDocs, memoryContext);
       }
     } else {
-      // 📴 MODE HORS-LIGNE : GEMMA LOCAL
-      print("📴 Chat : Pas de réseau → Gemma (Edge AI)");
+      //  MODE HORS-LIGNE : GEMMA LOCAL
+      print(" Chat : Pas de réseau → Gemma (Edge AI)");
       content = await _sendViaGemma(text, context, ragDocs, memoryContext);
     }
 
@@ -394,17 +394,17 @@ class ChatService {
           final data = jsonDecode(response.body);
           content = (data['choices'][0]['message']['content'] as String).trim();
         } else {
-          print("⚠️ Groq Vision erreur ${response.statusCode}");
-          content = '⚠️ L\'analyse d\'image nécessite une connexion stable. '
+          print(" Groq Vision erreur ${response.statusCode}");
+          content = ' L\'analyse d\'image nécessite une connexion stable. '
               'Erreur : ${response.statusCode}. Réessayez.';
         }
       } catch (e) {
-        print("⚠️ Échec Groq Vision ($e)");
-        content = '⚠️ Impossible d\'analyser l\'image : $e. '
+        print(" Échec Groq Vision ($e)");
+        content = ' Impossible d\'analyser l\'image : $e. '
             'Vérifiez votre connexion et réessayez.';
       }
     } else {
-      print("📴 Chat : Pas de réseau → Image locale (Gemma) non supportée");
+      print(" Chat : Pas de réseau → Image locale (Gemma) non supportée");
       if (text.isNotEmpty) {
         final gemmaResponse = await _sendViaGemma(
           text,
@@ -412,9 +412,9 @@ class ChatService {
           ragDocs,
           memoryContext,
         );
-        content = "⚠️ Mode hors-ligne : l'image a été ignorée car l'IA locale ne gère que le texte.\n\n\$gemmaResponse";
+        content = " Mode hors-ligne : l'image a été ignorée car l'IA locale ne gère que le texte.\n\n\$gemmaResponse";
       } else {
-        content = "⚠️ L'analyse d'image nécessite une connexion internet. L'IA locale ne gère que le texte. Veuillez vous connecter.";
+        content = " L'analyse d'image nécessite une connexion internet. L'IA locale ne gère que le texte. Veuillez vous connecter.";
       }
     }
 
@@ -463,7 +463,7 @@ $docsBlock
       );
       return response;
     } catch (e) {
-      print("❌ Erreur Gemma Chat : $e");
+      print(" Erreur Gemma Chat : $e");
       return 'Connexion impossible et IA locale indisponible. '
           'Réessayez quand vous aurez une connexion internet.';
     }

@@ -201,7 +201,7 @@ class VideoAnalysisService {
           lastConfidence: result.confidence,
         ));
       } catch (e) {
-        print('⚠️ Frame $i ignorée : $e');
+        print(' Frame $i ignorée : $e');
       }
     }
 
