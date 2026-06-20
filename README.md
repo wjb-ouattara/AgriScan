@@ -219,18 +219,17 @@ Au-delà de la détection, AgriScan intègre un **assistant conversationnel inte
 
 #### Onboarding & Authentification
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Splash screen / Logo | `images/screens/splash.png` |
-| Page de connexion | `images/screens/login.png` |
-| Page d'inscription | `images/screens/register.png` |
-| Mode invité | `images/screens/guest.png` |
+| Écran | Fichier à déposer              |
+|-------|--------------------------------|
+| Splash screen / Logo | `images/screens/splash.jpeg`   |
+| Page de connexion | `images/screens/login.jpeg`    |
+| Page d'inscription | `images/screens/register.jpeg` |
 
-![Splash](images/screens/splash.png)
-![Login](images/screens/login.png)
-![Register](images/screens/register.png)
+![Splash](images/screens/splash.jpeg)
+![Login](images/screens/login.jpeg)
+![Register](images/screens/register.jpeg)
 
-![Splash](images/screens/splash.jpeg) ![Login](images/screens/login.jpeg) ![Register](images/screens/signup.jpeg)
+![Splash](images/screens/splash.jpeg) ![Login](images/screens/login.jpeg) ![Register](images/screens/register.jpeg)
 
 ---
 
