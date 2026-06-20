@@ -234,97 +234,92 @@ Au-delà de la détection, AgriScan intègre un **assistant conversationnel inte
 
 #### Dashboard & Navigation
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Écran d'accueil / Home | `images/screens/home.png` |
-| Menu latéral (Drawer) | `images/screens/drawer.png` |
-| Tableau de bord | `images/screens/dashboard.png` |
-| Profil utilisateur | `images/screens/profile.png` |
-| Contexte agricole | `images/screens/context.png` |
+| Écran | Fichier à déposer              |
+|-------|--------------------------------|
+| Écran d'accueil / Home | `images/screens/home.jpg`      |
+| Menu latéral (Drawer) | `images/screens/drawer.jpg`    |
+| Tableau de bord | `images/screens/dashboard.jpg` |
+| Profil utilisateur | `images/screens/profile.jpg`   |
+| Contexte agricole | `images/screens/context.jpg`   |
 
-![Home](images/screens/home.png)
-![Drawer](images/screens/drawer.png)
-![Dashboard](images/screens/dashboard.png)
+![Home](images/screens/profile.jpg)
+![Drawer](images/screens/drawer.jpg)
+![Dashboard](images/screens/dashboard.jpg)
 
 ---
 
 #### Diagnostic IA — Cœur de l'application
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Scanner / Capture photo | `images/screens/scanner.png` |
-| Écran d'analyse en cours | `images/screens/analyzing.png` |
-| Résultat du diagnostic | `images/screens/result.png` |
-| Résultat — maladie détectée | `images/screens/result_disease.png` |
-| Résultat — plante saine | `images/screens/result_healthy.png` |
-| Sélection du modèle IA | `images/screens/model_selector.png` |
+| Écran | Fichier à déposer                  |
+|-------|------------------------------------|
+| Scanner / Capture photo | `images/screens/scanner.jpg`       |
+| Écran d'analyse en cours | `images/screens/analyzing.jpg`     |
+| Résultat — maladie détectée | `images/screens/result_disease.jpg` |
+| Résultat — plante saine | `images/screens/result_healthy.jpg` |
 
-![Scanner](images/screens/scanner.png)
-![Analyzing](images/screens/analyzing.png)
-![Result](images/screens/result.png)
-![Result Disease](images/screens/result_disease.png)
+![Scanner](images/screens/scanner.jpg)
+![Analyzing](images/screens/analyzing.jpg)
+![Result](images/screens/result.jpg)
+![Result Disease](images/screens/result_disease.jpg)
 
 ---
 
 #### Analyse Vidéo Drone 🚁
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Import vidéo drone | `images/screens/drone_import.png` |
-| Analyse vidéo en cours | `images/screens/drone_analyzing.png` |
-| Résultats vidéo (liste) | `images/screens/drone_results.png` |
-| Carte des zones infectées | `images/screens/field_map.png` |
-| Simulation traitement drone | `images/screens/drone_simulation.png` |
+| Écran | Fichier à déposer                     |
+|-------|---------------------------------------|
+| Import vidéo drone | `images/screens/drone_import.jpg`     |
+| Résultats vidéo (liste) | `images/screens/drone_results.jpg`    |
+| Carte des zones infectées | `images/screens/field_map.jpg`        |
+| Simulation traitement drone | `images/screens/drone_simulation.jpg` |
 
-![Drone Import](images/screens/drone_import.png)
-![Drone Results](images/screens/drone_results.png)
-![Field Map](images/screens/field_map.png)
-![Drone Simulation](images/screens/drone_simulation.png)
+![Drone Import](images/screens/drone_import.jpg)
+![Drone Results](images/screens/drone_results.jpg)
+![Field Map](images/screens/field_map.jpg)
+![Drone Simulation](images/screens/drone_simulation.jpg)
 
 ---
 
 #### Historique & Suivi
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Liste de l'historique | `images/screens/history.png` |
-| Détail d'une analyse | `images/screens/history_detail.png` |
-| Recommandations | `images/screens/recommendations.png` |
+| Écran | Fichier à déposer                     |
+|-------|---------------------------------------|
+| Liste de l'historique | `images/screens/history.jpg`          |
+| Recommandations | `images/screens/recommendations.jpeg` |
 
-![History](images/screens/history.png)
-![Recommendations](images/screens/recommendations.png)
+![History](images/screens/history.jpg)
+![Recommendations](images/screens/recommendations.jpeg)
 
 ---
 
 #### Assistant Agronome IA
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Écran de chat | `images/screens/chat.png` |
-| Conversation en cours | `images/screens/chat_conversation.png` |
-| Historique des conversations | `images/screens/chat_history.png` |
-| Base de connaissances | `images/screens/knowledge_base.png` |
+| Écran | Fichier à déposer                      |
+|-------|----------------------------------------|
+| Écran de chat | `images/screens/chat.jpg`              |
+| Conversation en cours | `images/screens/chat_conversation.jpg` |
+| Historique des conversations | `images/screens/chat_history.jpg`      |
+| Base de connaissances | `images/screens/knowledge_base.jpg`    |
 
-![Chat](images/screens/chat.png)
-![Chat Conversation](images/screens/chat_conversation.png)
+![Chat](images/screens/chat.jpg)
+![Chat Conversation](images/screens/chat_conversation.jpg)
 
 ---
 
 #### Marketplace Agricole
 
-| Écran | Fichier à déposer |
-|-------|-------------------|
-| Catalogue produits | `images/screens/marketplace.png` |
-| Détail d'un produit | `images/screens/product_detail.png` |
-| Panier | `images/screens/cart.png` |
-| Formulaire de commande | `images/screens/order_form.png` |
-| Confirmation commande | `images/screens/order_confirmation.png` |
-| Historique des commandes | `images/screens/orders_history.png` |
+| Écran | Fichier à déposer                       |
+|-------|-----------------------------------------|
+| Catalogue produits | `images/screens/marketplace.jpg`        |
+| Détail d'un produit | `images/screens/product_detail.jpg`     |
+| Panier | `images/screens/cart.jpg`               |
+| Formulaire de commande | `images/screens/order_form.jpg`         |
+| Confirmation commande | `images/screens/order_confirmation.jpg` |
 
-![Marketplace](images/screens/marketplace.png)
-![Product Detail](images/screens/product_detail.png)
-![Cart](images/screens/cart.png)
-![Order Confirmation](images/screens/order_confirmation.png)
+![Marketplace](images/screens/marketplace.jpg)
+![Product Detail](images/screens/product_detail.jpg)
+![Cart](images/screens/cart.jpg)
+![Order Confirmation](images/screens/order_confirmation.jpg)
 
 ---
 
@@ -342,9 +337,6 @@ Au-delà de la détection, AgriScan intègre un **assistant conversationnel inte
 
 ### Carte des zones infectées (résultat drone)
 
-> Déposer : `images/drone_map.png`
-
-![Drone Map](images/drone_map.png)
 
 ---
 
